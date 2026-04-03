@@ -118,8 +118,8 @@ Keep it concise and practical.
 
 
 async def _call_ai_for_insights(prompt: str) -> str:
-    """Call OpenAI API to generate insights from community discussions."""
-    api_key = os.getenv("OPENAI_API_KEY")
+    """Call Groq API to generate insights from community discussions."""
+    api_key = os.getenv("GROQ_API_KEY")
 
     if not api_key:
         return "AI summarization unavailable - no API key configured."
@@ -127,13 +127,13 @@ async def _call_ai_for_insights(prompt: str) -> str:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
+                "https://api.groq.com/openai/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "gpt-3.5-turbo",
+                    "model": "llama-3.1-8b-instant",
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 800,
                     "temperature": 0.7,

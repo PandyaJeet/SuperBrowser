@@ -12,10 +12,18 @@ const PERSONAS = [
   { id: "claude",     label: "Claude",       desc: "Nuanced & careful"   },
 ]
 
-const API_BASE = import.meta.env.VITE_API_BASE || 
-  (window.location.hostname === "localhost" 
-    ? "http://localhost:8000"
-    : window.location.href.replace(/:\d+.*/, ":8000").replace(/\/$/, ""));
+const API_BASE = import.meta.env.VITE_API_BASE || (() => {
+  const hostname = window.location.hostname;
+  if (hostname === "localhost") {
+    return "http://localhost:8000";
+  }
+  // Handle GitHub Codespaces URLs: xxx-5174.app.github.dev -> xxx-8000.app.github.dev
+  if (hostname.includes('.app.github.dev')) {
+    return window.location.origin.replace(/-\d+\.app\.github\.dev/, '-8000.app.github.dev');
+  }
+  // Fallback for other environments
+  return window.location.href.replace(/:\d+.*/, ":8000").replace(/\/$/, "");
+})();
 
 // Helper to create a new tab object
 function createNewTab() {
@@ -477,17 +485,17 @@ function SEOResults({ results }) {
 
 // AI Results Component
 function AIResults({ results }) {
-  const summary = results?.summary || results?.answer || ''
-  const fullAnswer = results?.full_answer || results?.details || ''
+  const answer = results?.answer || ''
   const personaUsed = results?.persona_used
+  const modelUsed = results?.model_used
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      {/* Summary Card */}
-      {summary && (
+      {/* AI Answer Card */}
+      {answer && (
         <div className="bg-gradient-to-r from-indigo-900/50 to-purple-900/50 rounded-xl p-6 border border-indigo-800">
           <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <span>🤖</span> AI Summary
+            <span>🤖</span> AI Answer
             {personaUsed && personaUsed !== "Default" && (
               <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 
                                dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 
@@ -496,21 +504,14 @@ function AIResults({ results }) {
               </span>
             )}
           </h3>
-          <p className="text-gray-200 leading-relaxed">{summary}</p>
+          <div className="text-gray-200 leading-relaxed whitespace-pre-wrap">{answer}</div>
+          {modelUsed && (
+            <p className="text-gray-500 text-xs mt-4">Model: {modelUsed}</p>
+          )}
         </div>
       )}
 
-      {/* Full Answer */}
-      {fullAnswer && (
-        <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-          <h3 className="text-lg font-semibold mb-3">Detailed Answer</h3>
-          <div className="text-gray-300 leading-relaxed whitespace-pre-wrap">
-            {fullAnswer}
-          </div>
-        </div>
-      )}
-
-      {!summary && !fullAnswer && (
+      {!answer && (
         <p className="text-gray-400">No AI results available.</p>
       )}
     </div>
