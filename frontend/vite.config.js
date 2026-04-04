@@ -8,6 +8,16 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
     outDir: 'dist',
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('recharts')) return 'vendor-recharts'
+          if (id.includes('react')) return 'vendor-react'
+          return 'vendor-misc'
+        },
+      },
+    },
   },
   server: {
     port: 5173,

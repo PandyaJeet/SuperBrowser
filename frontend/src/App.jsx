@@ -1,10 +1,11 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend
-} from 'recharts'
+import { Suspense, lazy, useState, useCallback, useEffect, useRef } from 'react'
 import { useContextManager } from './useContextManager'
 import { getApiBase } from './config/apiBase'
+
+const LazyCommunityResults = lazy(() => import('./components/CommunityResults'))
+const LazyBackgroundOrb = lazy(() => import('./components/BackgroundOrb'))
+import { ContinuousPaginationDemo } from './components/ContinuousPagination'
+import { AiInput } from './components/AiInput'
 
 const PERSONAS = [
   { id: "default",    label: "Default",     desc: "Raw Groq"            },
@@ -16,7 +17,6 @@ const PERSONAS = [
 
 const API_BASE = getApiBase()
 
-// Helper to create a new tab object
 function createNewTab(sessionId = null) {
   return {
     id: crypto.randomUUID(),
@@ -33,7 +33,33 @@ function createNewTab(sessionId = null) {
   }
 }
 
-function App() {
+/* ── SVG Icons ── */
+const SearchIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+)
+const PlusIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+)
+const XIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+)
+const MinusIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M5 12h14"/></svg>
+)
+const SquareIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+)
+const BrainIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 2a7 7 0 0 0-7 7c0 3 2 5.5 4 7.5L12 22l3-5.5c2-2 4-4.5 4-7.5a7 7 0 0 0-7-7z"/></svg>
+)
+const ClockIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+)
+const ChevronLeftIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+const ChevronRightIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+const RefreshIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+
+export default function App() {
   const [appSessionId] = useState(() => crypto.randomUUID())
   const [sessionStartedAt] = useState(() => new Date().toISOString())
   const [sessionStatus, setSessionStatus] = useState("starting")
@@ -43,1215 +69,535 @@ function App() {
   const [persona, setPersona] = useState("default")
   const [showContextInfo, setShowContextInfo] = useState(false)
   const [backendStatus, setBackendStatus] = useState(null)
-
-  // Initialize context manager
+  
+  const searchControllersRef = useRef({})
   const contextManager = useContextManager()
-
+  const { startSession, stopSession: stopContextSession } = contextManager
   const activeTab = tabs.find(t => t.id === activeTabId)
+  
   const isBrowserTab = Boolean(activeTab?.browserUrl)
+  // Only transition out of New Tab when a search is loading, finished, or has errored
+  const isNewTab = !activeTab?.results && !activeTab?.loading && !activeTab?.error && !isBrowserTab
 
   useEffect(() => {
     if (!window.superBrowserDesktop?.isElectron || !window.superBrowserDesktop?.backend?.getStatus) return
     window.superBrowserDesktop.backend.getStatus().then(setBackendStatus).catch(() => {})
   }, [])
 
-  const {
-    startSession: startContextSession,
-    stopSession: stopContextSession
-  } = contextManager
-
   useEffect(() => {
-    startContextSession(appSessionId)
+    startSession(appSessionId)
       .then(() => setSessionStatus("active"))
       .catch(() => setSessionStatus("error"))
-
-    const handleStopSession = () => {
+    const stopSession = () => {
       stopContextSession(appSessionId, { keepalive: true }).catch(() => {})
       setSessionStatus("stopped")
     }
-
-    window.addEventListener("beforeunload", handleStopSession)
-    return () => {
-      window.removeEventListener("beforeunload", handleStopSession)
-      handleStopSession()
-    }
-  }, [appSessionId, startContextSession, stopContextSession])
+    window.addEventListener("beforeunload", stopSession)
+    return () => { window.removeEventListener("beforeunload", stopSession); stopSession() }
+  }, [appSessionId, startSession, stopContextSession])
 
   const updateTab = useCallback((tabId, updates) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t))
   }, [])
 
   const performSearch = useCallback((tabId, tabData, searchPersona = "default") => {
-    const endpoints = {
-      seo: `/api/search/seo`,
-      ai: `/api/search/ai`,
-      community: `/api/search/community`
+    const endpoints = { seo: `/api/search/seo`, ai: `/api/search/ai`, community: `/api/search/community` }
+    const prev = searchControllersRef.current[tabId]
+    if (prev) prev.abort()
+    const controller = new AbortController()
+    searchControllersRef.current[tabId] = controller
+    const parseApiResponse = async (response) => {
+      let payload = null
+      try {
+        payload = await response.json()
+      } catch {
+        payload = null
+      }
+
+      if (!response.ok) {
+        const detail = payload?.detail || payload?.error || `HTTP ${response.status}`
+        throw new Error(String(detail))
+      }
+
+      return payload
     }
 
-    // For AI mode, use contextual endpoint if we have context
+    const onSuccess = (data) => {
+      setTabs(p => p.map(t => t.id === tabId ? { ...t, results: data, loading: false } : t))
+      if (Array.isArray(data?.results) && data.results.length > 0) contextManager.addResults(tabId, tabData.sessionId, data.results)
+    }
+    const onError = (error) => {
+      if (error?.name === 'AbortError') return
+      const message = error?.message ? `Search failed: ${error.message}` : "Search failed. Please try again."
+      setTabs(p => p.map(t => t.id === tabId ? { ...t, error: message, loading: false } : t))
+    }
+    const onDone = () => { if (searchControllersRef.current[tabId] === controller) delete searchControllersRef.current[tabId] }
+    
     if (tabData.activeMode === 'ai') {
       const context = contextManager.getAIContext(tabId)
-      const hasContext =
-        context.queries.length > 0 ||
-        context.results.length > 0 ||
-        context.visited_pages.length > 0
-      
+      const hasContext = context.queries.length > 0 || context.results.length > 0 || context.visited_pages.length > 0
       if (hasContext) {
-        // Use POST endpoint with context
-        fetch(`${API_BASE}/api/search/ai/contextual`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            query: tabData.query,
-            persona: searchPersona,
-            context: context
-          })
-        })
-          .then(res => res.json())
-          .then(data => {
-            setTabs(prev => prev.map(t => t.id === tabId ? { ...t, results: data, loading: false } : t))
-            // Track results in context
-            contextManager.addResults(tabId, tabData.sessionId, data.results || [])
-          })
-          .catch(() => {
-            setTabs(prev => prev.map(t => t.id === tabId ? { ...t, error: "Search failed. Please try again.", loading: false } : t))
-          })
+        fetch(`${API_BASE}/api/search/ai/contextual`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ query: tabData.query, persona: searchPersona, context }) })
+          .then(parseApiResponse).then(onSuccess).catch(onError).finally(onDone)
         return
       }
     }
-
-    // Regular search (non-AI or AI without context)
     let url = `${API_BASE}${endpoints[tabData.activeMode]}?q=${encodeURIComponent(tabData.query)}&session_id=${tabData.sessionId}`
-    if (tabData.activeMode === 'ai') {
-      url += `&persona=${searchPersona}`
-    }
-
-    fetch(url)
-      .then(res => res.json())
-      .then(data => {
-        setTabs(prev => prev.map(t => t.id === tabId ? { ...t, results: data, loading: false } : t))
-        
-        // Track results in context for future use
-        if (data.results && Array.isArray(data.results)) {
-          contextManager.addResults(tabId, tabData.sessionId, data.results)
-        }
-      })
-      .catch(() => {
-        setTabs(prev => prev.map(t => t.id === tabId ? { ...t, error: "Search failed. Please try again.", loading: false } : t))
-      })
+    if (tabData.activeMode === 'ai') url += `&persona=${searchPersona}`
+    fetch(url, { signal: controller.signal }).then(parseApiResponse).then(onSuccess).catch(onError).finally(onDone)
   }, [contextManager])
 
   const handleSearch = useCallback((tabId, searchPersona = "default") => {
     setTabs(currentTabs => {
       const tab = currentTabs.find(t => t.id === tabId)
       if (!tab?.query.trim()) return currentTabs
-      
-      // Track query in context
       contextManager.addQuery(tabId, tab.sessionId, tab.query, tab.activeMode)
-      
-      // Trigger the async fetch with current tab data
       performSearch(tabId, tab, searchPersona)
-
-      // Return updated tabs with loading state
       return currentTabs.map(t => {
         if (t.id !== tabId) return t
-        return {
-          ...t,
-          loading: true,
-          error: null,
-          title: t.query.slice(0, 25),
-          history: [...t.history, { query: t.query, mode: t.activeMode }].slice(-10)
-        }
+        return { ...t, loading: true, error: null, title: t.query.slice(0, 25), history: [...t.history, { query: t.query, mode: t.activeMode }].slice(-10) }
       })
     })
   }, [performSearch, contextManager])
 
-  // Handle mode change - update mode and trigger search if there's an active query with results
   const handleModeChange = useCallback((mode) => {
     setTabs(currentTabs => {
       const tab = currentTabs.find(t => t.id === activeTabId)
       if (!tab) return currentTabs
-
       const shouldSearch = tab.query && tab.results
       const updatedTab = { ...tab, activeMode: mode }
-
       if (shouldSearch) {
-        // Trigger search with new mode
         performSearch(activeTabId, updatedTab, persona)
-        return currentTabs.map(t => {
-          if (t.id !== activeTabId) return t
-          return {
-            ...updatedTab,
-            loading: true,
-            error: null,
-            history: [...t.history, { query: t.query, mode }].slice(-10)
-          }
-        })
+        return currentTabs.map(t => { if (t.id !== activeTabId) return t; return { ...updatedTab, loading: true, error: null, history: [...t.history, { query: t.query, mode }].slice(-10) } })
       }
-
       return currentTabs.map(t => t.id === activeTabId ? updatedTab : t)
     })
   }, [activeTabId, performSearch, persona])
 
-  function handleAddTab() {
-    const newTab = createNewTab(appSessionId)
-    setTabs(prev => [...prev, newTab])
-    setActiveTabId(newTab.id)
-  }
-
+  function handleAddTab() { const n = createNewTab(appSessionId); setTabs(p => [...p, n]); setActiveTabId(n.id) }
   function handleCloseTab(tabId, e) {
     e.stopPropagation()
-    if (tabs.length === 1) {
-      // Reset the only tab instead of closing
-      const resetTab = createNewTab(appSessionId)
-      resetTab.id = tabs[0].id
-      setTabs([resetTab])
-      return
-    }
-
-    const tabIndex = tabs.findIndex(t => t.id === tabId)
-    const newTabs = tabs.filter(t => t.id !== tabId)
-    setTabs(newTabs)
-
-    if (tabId === activeTabId) {
-      // Switch to tab on the left, or first tab if closing first
-      const newIndex = Math.max(0, tabIndex - 1)
-      setActiveTabId(newTabs[newIndex].id)
-    }
+    if (tabs.length === 1) { const r = createNewTab(appSessionId); r.id = tabs[0].id; setTabs([r]); return }
+    const nTabs = tabs.filter(t => t.id !== tabId); setTabs(nTabs)
+    if (tabId === activeTabId) setActiveTabId(nTabs[Math.max(0, tabs.findIndex(t => t.id === tabId) - 1)].id)
   }
-
-  function handleHistoryClick(historyItem) {
-    updateTab(activeTabId, { 
-      query: historyItem.query, 
-      activeMode: historyItem.mode 
-    })
-    setTimeout(() => handleSearch(activeTabId, persona), 0)
-  }
-
-  function handleSuggestedSearch(query) {
-    updateTab(activeTabId, { query, browserUrl: "", browserTitle: "" })
-  }
-
+  function handleHistoryClick(item) { updateTab(activeTabId, { query: item.query, activeMode: item.mode }); setTimeout(() => handleSearch(activeTabId, persona), 0) }
   function openInAppUrl(url, title = "Web Page") {
     if (!url) return
-    const browserTab = createNewTab(appSessionId)
-    browserTab.browserUrl = url
-    browserTab.browserTitle = title
-    browserTab.title = (title || "Web").slice(0, 25)
-    browserTab.query = url
-    setTabs(prev => [...prev, browserTab])
-    setActiveTabId(browserTab.id)
-    if (activeTab) {
-      contextManager.addVisitedPage(activeTabId, activeTab.sessionId, url, title, `Visited: ${url}`)
-    }
+    const bt = createNewTab(appSessionId); bt.browserUrl = url; bt.browserTitle = title; bt.title = (title || "Web").slice(0, 25); bt.query = url
+    setTabs(p => [...p, bt]); setActiveTabId(bt.id)
+    if (activeTab) contextManager.addVisitedPage(activeTabId, activeTab.sessionId, url, title, `Visited: ${url}`)
   }
 
   return (
-    <div className="h-screen bg-gray-950 text-white flex flex-col overflow-hidden">
-      {/* Tab Bar */}
-      <TabBar
-        tabs={tabs}
-        activeTabId={activeTabId}
-        onTabClick={setActiveTabId}
-        onCloseTab={handleCloseTab}
-        onAddTab={handleAddTab}
-      />
+    <div className="h-screen flex flex-col overflow-hidden bg-transparent text-[var(--text-primary)] relative z-10">
+      <Suspense fallback={null}>
+        <LazyBackgroundOrb isVisible={isNewTab} />
+      </Suspense>
+
+      {/* Hand-drawn style Tab Bar */}
+      <TabBar tabs={tabs} activeTabId={activeTabId} onTabClick={setActiveTabId} onCloseTab={handleCloseTab} onAddTab={handleAddTab} />
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col min-h-0">
-        {!isBrowserTab && (
-          <>
-            {/* Address Bar */}
-            <AddressBar
-              query={activeTab?.query || ""}
-              loading={activeTab?.loading || false}
-              onQueryChange={(q) => updateTab(activeTabId, { query: q })}
-              onSearch={() => handleSearch(activeTabId, persona)}
-            />
+      <div className="flex-1 flex flex-col min-h-0 relative">
+        {window.superBrowserDesktop?.isElectron && <BackendStatusBanner status={backendStatus} />}
 
-            {/* Mode Selector */}
-            <ModeSelector
-              activeMode={activeTab?.activeMode || "seo"}
-              onModeChange={handleModeChange}
-            />
-
-            {window.superBrowserDesktop?.isElectron && (
-              <BackendStatusBanner status={backendStatus} />
-            )}
-
-            {/* Persona Selector (AI mode only) */}
-            {activeTab?.activeMode === 'ai' && (
-              <div className="flex justify-center items-center gap-4 pb-4 bg-gray-950">
-                <select
-                  value={persona}
-                  onChange={e => setPersona(e.target.value)}
-                  className="text-sm border border-gray-300 dark:border-gray-600 
-                             rounded-lg px-3 py-1.5 bg-white dark:bg-gray-800 
-                             text-gray-700 dark:text-gray-200 cursor-pointer"
-                >
-                  {PERSONAS.map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.label} — {p.desc}
-                    </option>
-                  ))}
-                </select>
-                
-                {/* Context Indicator */}
-                <ContextIndicator 
-                  tabId={activeTabId}
-                  contextManager={contextManager}
-                  onToggleInfo={() => setShowContextInfo(!showContextInfo)}
-                />
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Content Area with optional sidebar */}
-        <div className="flex-1 flex relative min-h-0">
-          <div className={`flex-1 min-h-0 ${isBrowserTab ? 'overflow-hidden p-0' : 'overflow-auto p-4'}`}>
-            {activeTab?.error && (
-              <div className="bg-red-900/50 border border-red-700 rounded-lg p-4 mb-4 text-red-200">
-                {activeTab.error}
-              </div>
-            )}
-
-            {activeTab?.browserUrl ? (
-              <BrowserPanel
-                url={activeTab.browserUrl}
-                title={activeTab.browserTitle}
-                onPageVisit={(visitedUrl, visitedTitle) => {
-                  if (!activeTab) return
-                  contextManager.addVisitedPage(
-                    activeTabId,
-                    activeTab.sessionId,
-                    visitedUrl,
-                    visitedTitle || "Visited Page",
-                    `Visited: ${visitedUrl}`
-                  )
-                }}
-                onClose={() => updateTab(activeTabId, { browserUrl: "", browserTitle: "" })}
-              />
-            ) : !activeTab?.results && !activeTab?.query ? (
-              <NewTabPage onSuggestedSearch={handleSuggestedSearch} />
-            ) : (
-              <ResultsPanel
-                mode={activeTab?.activeMode}
-                results={activeTab?.results}
-                loading={activeTab?.loading}
-                onOpenLink={openInAppUrl}
-              />
-            )}
+        {isBrowserTab ? (
+          <div className="flex-1 min-h-0 bg-white">
+            <BrowserPanel url={activeTab.browserUrl} title={activeTab.browserTitle} onClose={() => updateTab(activeTabId, { browserUrl: "", browserTitle: "" })} />
           </div>
+        ) : isNewTab ? (
+          /* Hand-drawn Centered Landing Page */
+          <div className="flex-1 flex flex-col items-center justify-center p-4 animate-fade-in-up">
+            <div className="relative mb-12">
+              <div className="absolute inset-0 bg-white/70 blur-3xl -z-10 rounded-full scale-[1.3] pointer-events-none"></div>
+              <h1 className="title-hero text-center select-none m-0">SUPER BROWSER</h1>
+            </div>
+            
+            <div className="w-full max-w-2xl mb-8">
+              <div className="pill-search flex items-center px-6 py-4 w-full cursor-text relative bg-white/80 backdrop-blur-sm" onClick={() => document.getElementById('search-input-home')?.focus()}>
+                <button 
+                  onClick={(e) => { e.stopPropagation(); handleSearch(activeTabId, persona) }} 
+                  className="text-[var(--text-secondary)] hover:text-[var(--action-primary)] transition-colors shrink-0"
+                >
+                  <SearchIcon />
+                </button>
+                <input id="search-input-home" type="text" value={activeTab?.query || ''} 
+                  onChange={(e) => updateTab(activeTabId, { query: e.target.value })} 
+                  onKeyDown={(e) => e.key === 'Enter' && handleSearch(activeTabId, persona)}
+                  placeholder="Enter your search..."
+                  className="flex-1 ml-4 outline-none text-xl bg-transparent text-[var(--text-primary)]"
+                  style={{ letterSpacing: '-0.01em' }} />
+              </div>
+            </div>
 
-          {/* History Sidebar */}
-          {!isBrowserTab && (
-            <HistorySidebar
-              show={showHistory}
-              onToggle={() => setShowHistory(!showHistory)}
-              history={activeTab?.history || []}
-              onHistoryClick={handleHistoryClick}
-            />
-          )}
-        </div>
+            <div className="flex flex-wrap justify-center gap-4">
+              <button onClick={() => updateTab(activeTabId, { activeMode: 'seo' })} className={`pill-btn px-6 py-2.5 ${activeTab?.activeMode === 'seo' ? 'active' : ''}`}>SUPER SEO</button>
+              <button onClick={() => updateTab(activeTabId, { activeMode: 'ai' })} className={`pill-btn px-6 py-2.5 ${activeTab?.activeMode === 'ai' ? 'active' : ''}`}>SUPER AI</button>
+              <button onClick={() => updateTab(activeTabId, { activeMode: 'community' })} className={`pill-btn px-6 py-2.5 ${activeTab?.activeMode === 'community' ? 'active' : ''}`}>SUPER REVIEW</button>
+            </div>
+          </div>
+        ) : (
+          /* Active Search View */
+          <div className="flex-1 flex flex-col min-h-0 bg-white shadow-xl relative z-10">
+            {/* Minimalist Top Header */}
+            <div className="px-6 py-3 border-b border-[var(--border-color)] flex items-center gap-6 bg-white">
+               {/* Browser Navigation Controls */}
+               <div className="flex items-center gap-1 -mr-2">
+                 <button onClick={() => {
+                   if (activeTab?.history && activeTab.history.length > 1) {
+                     const prev = activeTab.history[activeTab.history.length - 2];
+                     updateTab(activeTabId, { query: prev.query, activeMode: prev.mode, history: activeTab.history.slice(0, -1) });
+                     setTimeout(() => handleSearch(activeTabId, persona), 0);
+                   } else {
+                     updateTab(activeTabId, { query: "", results: null, loading: false });
+                   }
+                 }} className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Back">
+                   <ChevronLeftIcon />
+                 </button>
+                 <button disabled className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] opacity-30 cursor-not-allowed transition-colors" title="Forward">
+                   <ChevronRightIcon />
+                 </button>
+                 <button onClick={() => { if (activeTab?.query) handleSearch(activeTabId, persona) }} className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Reload">
+                   <RefreshIcon />
+                 </button>
+               </div>
+
+               <div className="pill-search flex items-center px-5 py-2.5 flex-1 max-w-3xl">
+                  {activeTab?.loading ? <div className="w-[18px] h-[18px] rounded-full border-2 border-[var(--border-color)] border-t-[var(--action-primary)] animate-spin" /> : <span className="text-[var(--text-tertiary)]"><SearchIcon /></span>}
+                  <input type="text" value={activeTab?.query || ''} 
+                    onChange={(e) => updateTab(activeTabId, { query: e.target.value })} 
+                    onKeyDown={(e) => e.key === 'Enter' && handleSearch(activeTabId, persona)}
+                    className="flex-1 ml-3 outline-none text-base bg-transparent text-[var(--text-primary)]" />
+               </div>
+               <div className="flex items-center gap-2">
+                 <button onClick={() => handleModeChange('seo')} className={`pill-btn px-4 py-1.5 ${activeTab?.activeMode === 'seo' ? 'active' : ''}`}>SEO</button>
+                 <button onClick={() => handleModeChange('ai')} className={`pill-btn px-4 py-1.5 ${activeTab?.activeMode === 'ai' ? 'active' : ''}`}>AI</button>
+                 <button onClick={() => handleModeChange('community')} className={`pill-btn px-4 py-1.5 ${activeTab?.activeMode === 'community' ? 'active' : ''}`}>REVIEW</button>
+               </div>
+               <button onClick={() => setShowHistory(!showHistory)} className="btn-secondary px-4 py-1.5 text-sm ml-auto flex items-center gap-2"><ClockIcon /> History</button>
+            </div>
+            
+            {/* Content Area */}
+            <div className="flex-1 flex overflow-hidden bg-white">
+               <div className="flex-1 overflow-auto p-6 md:p-10 max-w-5xl mx-auto">
+                 {activeTab?.error && <div className="text-red-700 border border-red-200 bg-red-50 p-4 rounded-xl mb-6 text-sm max-w-4xl mx-auto">{activeTab.error}</div>}
+                 
+                 {/* AI Persona Bar inside results area for cleaner header */}
+                 {activeTab?.activeMode === 'ai' && (
+                   <div className="max-w-4xl mx-auto mb-6 flex justify-between items-center">
+                     <div className="flex items-center gap-3">
+                       <span className="text-sm font-medium text-[var(--text-secondary)]">Persona:</span>
+                       <select value={persona} onChange={e => setPersona(e.target.value)} className="bg-white border border-[var(--border-color)] rounded-md px-3 py-1.5 text-sm outline-none cursor-pointer">
+                         {PERSONAS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                       </select>
+                     </div>
+                     <ContextIndicator tabId={activeTabId} contextManager={contextManager} onToggleInfo={() => setShowContextInfo(!showContextInfo)} />
+                   </div>
+                 )}
+
+                 <ResultsPanel mode={activeTab?.activeMode} results={activeTab?.results} loading={activeTab?.loading} onOpenLink={openInAppUrl} />
+               </div>
+               
+               {/* History Panel Sidebar */}
+               {showHistory && (
+                 <div className="w-80 border-l border-[var(--border-color)] bg-white p-4 overflow-y-auto">
+                   <h3 className="font-semibold mb-4 text-[var(--text-primary)]">Tab History</h3>
+                   <div className="space-y-2">
+                     {activeTab?.history?.slice().reverse().map((item, i) => (
+                       <button key={i} onClick={() => handleHistoryClick(item)} className="w-full text-left p-3 rounded-lg border border-[var(--border-color)] hover:border-[var(--border-hover)] hover:bg-[var(--bg-hover)] transition-colors">
+                         <p className="text-sm truncate mb-1 text-[var(--text-primary)]">{item.query}</p>
+                         <span className="text-[11px] px-2 py-0.5 rounded font-medium bg-[var(--bg-elevated)] text-[var(--text-secondary)] uppercase">{item.mode}</span>
+                       </button>
+                     ))}
+                   </div>
+                 </div>
+               )}
+            </div>
+          </div>
+        )}
       </div>
 
-      <ContextWindow
-        show={showContextInfo}
-        onClose={() => setShowContextInfo(false)}
-        tabId={activeTabId}
-        sessionId={appSessionId}
-        sessionStartedAt={sessionStartedAt}
-        sessionStatus={sessionStatus}
-        contextManager={contextManager}
-      />
+      <ContextWindow show={showContextInfo} onClose={() => setShowContextInfo(false)} tabId={activeTabId} sessionId={appSessionId} sessionStartedAt={sessionStartedAt} sessionStatus={sessionStatus} contextManager={contextManager} />
     </div>
   )
 }
 
-// Tab Bar Component
+/* ── UI Components ── */
+
 function TabBar({ tabs, activeTabId, onTabClick, onCloseTab, onAddTab }) {
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
   return (
-    <div className="bg-gray-800 flex items-center overflow-x-auto scrollbar-hide md:flex hidden">
-      <div className="flex items-center min-w-0 flex-1">
-        {tabs.map(tab => (
-          <div
-            key={tab.id}
-            onClick={() => onTabClick(tab.id)}
-            className={`flex items-center gap-2 px-3 py-2 min-w-[120px] max-w-[200px] cursor-pointer border-r border-gray-700 group transition-colors ${
-              tab.id === activeTabId
-                ? 'bg-gray-950'
-                : 'bg-gray-800 hover:bg-gray-700'
-            }`}
-          >
-            {/* Favicon circle */}
-            <div className="w-4 h-4 rounded-full bg-indigo-500 flex-shrink-0" />
-            {/* Title */}
-            <span className="truncate text-sm flex-1">
-              {tab.title.length > 20 ? tab.title.slice(0, 20) + '…' : tab.title}
+    <div className="flex border-b border-[var(--border-color)] w-full bg-white select-none" style={{ height: '44px' }}>
+      <div className="flex-1 flex overflow-x-auto scrollbar-hide h-full">
+        {tabs.map((tab, idx) => (
+          <div key={tab.id} onClick={() => onTabClick(tab.id)}
+            className={`flex items-center gap-2 px-4 h-full min-w-[140px] max-w-[240px] cursor-pointer border-r border-[var(--border-color)] group ${tab.id === activeTabId ? 'tab-active' : 'tab-inactive'}`}>
+            <span className="truncate text-[13px] flex-1">
+              {tab.id === activeTabId ? `TAB ${idx + 1}` : (tab.title.length > 20 ? tab.title.slice(0, 20) + '…' : tab.title)}
             </span>
-            {/* Close button */}
-            <button
-              onClick={(e) => onCloseTab(tab.id, e)}
-              className="w-5 h-5 flex items-center justify-center rounded hover:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-            >
-              ×
-            </button>
+            <button onClick={(e) => onCloseTab(tab.id, e)} className="w-5 h-5 flex items-center justify-center rounded hover:bg-black/5 opacity-0 group-hover:opacity-100 text-[var(--text-tertiary)]"><XIcon /></button>
           </div>
         ))}
-      </div>
-      {/* Add tab button */}
-      <button
-        onClick={onAddTab}
-        className="px-4 py-2 hover:bg-gray-700 transition-colors text-xl"
-        title="New Tab"
-      >
-        +
-      </button>
-    </div>
-  )
-}
-
-// Address Bar Component
-function AddressBar({ query, loading, onQueryChange, onSearch }) {
-  function handleKeyDown(e) {
-    if (e.key === 'Enter') {
-      onSearch()
-    }
-  }
-
-  return (
-    <div className="p-4 bg-gray-950">
-      <div className="flex items-center bg-gray-900 border border-gray-700 rounded-full px-4 py-2 max-w-4xl mx-auto">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => onQueryChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Search anything..."
-          className="flex-1 bg-transparent outline-none text-white placeholder-gray-500"
-        />
-        {loading ? (
-          <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-        ) : (
-          <button
-            onClick={onSearch}
-            className="text-indigo-500 hover:text-indigo-400 transition-colors font-medium"
-          >
-            Search
-          </button>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// Mode Selector Component
-function ModeSelector({ activeMode, onModeChange }) {
-  const modes = [
-    { id: 'seo', label: 'SuperSEO' },
-    { id: 'ai', label: 'SuperAI' },
-    { id: 'community', label: 'SuperReview' }
-  ]
-
-  return (
-    <div className="flex justify-center gap-2 pb-4 bg-gray-950">
-      {modes.map(mode => (
-        <button
-          key={mode.id}
-          onClick={() => onModeChange(mode.id)}
-          className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-            activeMode === mode.id
-              ? 'bg-indigo-500 text-white'
-              : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-          }`}
-        >
-          {mode.label}
+        <button onClick={onAddTab} className="px-4 h-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border-r border-[var(--border-color)] flex items-center justify-center transition-colors">
+          <PlusIcon />
         </button>
+      </div>
+      <div className="flex items-center h-full border-l border-[var(--border-color)] relative">
+        <button 
+          onClick={() => setIsMenuOpen(!isMenuOpen)}
+          className={`px-5 h-full text-[12px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors ${isMenuOpen ? 'bg-[var(--bg-hover)]' : ''}`}
+        >
+          BROWSER MENU
+        </button>
+        {isMenuOpen && <BrowserMenu onClose={() => setIsMenuOpen(false)} />}
+        <div className="flex h-full pl-1 border-l border-[var(--border-color)]">
+          <button className="w-12 h-full text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] flex items-center justify-center transition-colors"><MinusIcon /></button>
+          <button className="w-12 h-full text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] flex items-center justify-center transition-colors"><SquareIcon /></button>
+          <button className="w-12 h-full text-[var(--text-tertiary)] hover:bg-red-500 hover:text-white flex items-center justify-center transition-colors"><XIcon /></button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LoadingSkeleton() {
+  return (
+    <div className="max-w-4xl mx-auto space-y-4 animate-fade-in-up">
+      {[...Array(4)].map((_, i) => (
+        <div key={i} className="card-minimal p-6" style={{ animationDelay: `${i * 50}ms` }}>
+          <div className="h-5 w-3/4 mb-4 rounded-full bg-[var(--border-color)] animate-pulse" />
+          <div className="h-3 w-1/2 mb-3 rounded-full bg-[var(--border-color)] animate-pulse" />
+          <div className="h-3 w-full rounded-full bg-[var(--border-color)] animate-pulse" />
+        </div>
       ))}
     </div>
   )
 }
 
-// New Tab Page Component
-function NewTabPage({ onSuggestedSearch }) {
-  const features = [
-    {
-      title: 'SuperSEO',
-      description: 'Cross-validated search results from multiple sources',
-      icon: '🔍'
-    },
-    {
-      title: 'SuperAI',
-      description: 'AI-powered summaries and comprehensive answers',
-      icon: '🤖'
-    },
-    {
-      title: 'SuperReview',
-      description: 'Community insights and Stack Overflow answers',
-      icon: '💬'
-    }
-  ]
-
-  const suggestedSearches = [
-    "what is machine learning",
-    "python vs javascript",
-    "how does the internet work"
-  ]
-
-  return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
-      <h1 className="text-5xl font-bold mb-4 bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
-        SuperBrowser
-      </h1>
-      <p className="text-gray-400 text-lg mb-12">
-        One search. Multiple sources. Zero ads.
-      </p>
-
-      {/* Feature Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-12 max-w-4xl">
-        {features.map(feature => (
-          <div
-            key={feature.title}
-            className="bg-gray-900 rounded-xl p-6 border border-gray-800"
-          >
-            <div className="text-4xl mb-3">{feature.icon}</div>
-            <h3 className="text-lg font-semibold mb-2 text-indigo-400">
-              {feature.title}
-            </h3>
-            <p className="text-gray-400 text-sm">{feature.description}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Suggested Searches */}
-      <div>
-        <p className="text-gray-500 text-sm mb-3">Try searching for:</p>
-        <div className="flex flex-wrap justify-center gap-2">
-          {suggestedSearches.map(search => (
-            <button
-              key={search}
-              onClick={() => onSuggestedSearch(search)}
-              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-full text-sm transition-colors"
-            >
-              {search}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// Results Panel Component
 function ResultsPanel({ mode, results, loading, onOpenLink }) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[40vh]">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-400">Searching...</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (!results) {
-    return null
-  }
-
-  if (mode === 'seo') {
-    return <SEOResults results={results} onOpenLink={onOpenLink} />
-  } else if (mode === 'ai') {
-    return <AIResults results={results} />
-  } else if (mode === 'community') {
-    return <CommunityResults results={results} onOpenLink={onOpenLink} />
-  }
-
+  if (loading) return <LoadingSkeleton />
+  if (!results) return null
+  if (mode === 'seo') return <SEOResults results={results} onOpenLink={onOpenLink} />
+  if (mode === 'ai') return <AIResults results={results} />
+  if (mode === 'community') return <Suspense fallback={<LoadingSkeleton />}><LazyCommunityResults results={results} onOpenLink={onOpenLink} /></Suspense>
   return null
 }
 
-// SEO Results Component
 function SEOResults({ results, onOpenLink }) {
   const items = results?.results || results || []
-
-  if (!Array.isArray(items) || items.length === 0) {
-    return <p className="text-gray-400">No results found.</p>
-  }
-
+  if (!items.length) return <p className="text-[var(--text-secondary)] text-center py-10">No results found.</p>
   return (
-    <div className="space-y-4 max-w-4xl mx-auto">
-      {items.map((result, index) => (
-        <div
-          key={index}
-          className="bg-gray-900 rounded-lg p-4 border border-gray-800 hover:border-gray-700 transition-colors"
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1 min-w-0">
-              <a
-                href={result.url}
-                onClick={(e) => {
-                  e.preventDefault()
-                  onOpenLink?.(result.url, result.title || "Search Result")
-                }}
-                className="text-indigo-400 hover:text-indigo-300 font-medium text-lg block truncate"
-              >
-                {result.title}
-              </a>
-              <p className="text-green-500 text-sm truncate mb-2">{result.url}</p>
-              <p className="text-gray-400 text-sm line-clamp-2">{result.snippet || result.description}</p>
-            </div>
-            {result.cross_validated && (
-              <span className="bg-indigo-500/20 text-indigo-400 text-xs px-2 py-1 rounded-full whitespace-nowrap">
-                ✓ Cross-validated
-              </span>
-            )}
+    <div className="space-y-6 max-w-3xl">
+      {items.map((r, i) => (
+        <div key={i} className={`pb-6 mb-6 border-b border-[var(--border-color)] last:border-0 animate-fade-in-up stagger-${Math.min(i + 1, 3)}`}>
+          <div className="flex-1 min-w-0">
+            <a href={r.url} onClick={(e) => { e.preventDefault(); onOpenLink?.(r.url, r.title || "Search Result") }} className="font-medium text-[22px] block mb-1 text-[#1a0dab] hover:underline truncate hover:text-[#2b6ce0] transition-colors">{r.title}</a>
+            <p className="text-[13px] truncate mb-3 text-[#006621]">{r.url}</p>
+            <p className="text-[15px] text-[var(--text-secondary)] line-clamp-3 leading-relaxed">{r.snippet || r.description}</p>
           </div>
         </div>
       ))}
+      {items.length > 0 && <ContinuousPaginationDemo totalPages={5} defaultPage={2} />}
     </div>
   )
 }
 
-// AI Results Component
 function AIResults({ results }) {
   const answer = results?.answer || ''
-  const personaUsed = results?.persona_used
-  const modelUsed = results?.model_used
-
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      {/* AI Answer Card */}
-      {answer && (
-        <div className="bg-gradient-to-r from-indigo-900/50 to-purple-900/50 rounded-xl p-6 border border-indigo-800">
-          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <span>🤖</span> AI Answer
-            {personaUsed && personaUsed !== "Default" && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 
-                               dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 
-                               font-medium">
-                {personaUsed} style
-              </span>
-            )}
-          </h3>
-          <div className="text-gray-200 leading-relaxed whitespace-pre-wrap">{answer}</div>
-          {modelUsed && (
-            <p className="text-gray-500 text-xs mt-4">Model: {modelUsed}</p>
-          )}
+    <div className="max-w-3xl space-y-6 animate-fade-in-up">
+      {answer ? (
+        <div className="p-8 bg-white border border-[var(--border-color)] rounded-3xl" style={{ borderTop: '4px solid var(--action-primary)' }}>
+          <h3 className="text-xl font-medium mb-6 flex items-center gap-3"><BrainIcon /> AI Answer</h3>
+          <div className="leading-loose whitespace-pre-wrap text-[16px] text-[var(--text-primary)]">{answer}</div>
         </div>
-      )}
-
-      {!answer && (
-        <p className="text-gray-400">No AI results available.</p>
-      )}
+      ) : <p className="text-[var(--text-secondary)] py-10">No AI results available.</p>}
     </div>
   )
 }
 
-// Community Results Component
-function CommunityResults({ results, onOpenLink }) {
-  const insights = results?.insights || ""
-  const stack_results = results?.stack_results || []
-  const reddit_results = results?.reddit_results || []
-  const hn_results = results?.hn_results || []
-  const devto_results = results?.devto_results || []
-
-  // Chart 1 - Source Coverage Data
-  const coverageData = [
-    { platform: "StackOverflow", count: stack_results.length, fill: "#6366f1" },
-    { platform: "Hacker News", count: hn_results.length, fill: "#f97316" },
-    { platform: "Dev.to", count: devto_results.length, fill: "#a855f7" },
-    { platform: "Reddit", count: reddit_results.length, fill: "#ef4444" },
-  ].filter(d => d.count > 0)
-
-  // Chart 2 - Engagement Data
-  const stack_engagement = stack_results.reduce((sum, r) => sum + (r.score || 0), 0)
-  const hn_engagement = hn_results.reduce((sum, r) => sum + (r.score || 0), 0)
-  const devto_engagement = devto_results.reduce((sum, r) => sum + (r.reactions || 0), 0)
-  const reddit_engagement = reddit_results.reduce((sum, r) => sum + (r.post_score || 0), 0)
-
-  const engagementData = [
-    { name: "StackOverflow", value: stack_engagement, color: "#6366f1" },
-    { name: "Hacker News", value: hn_engagement, color: "#f97316" },
-    { name: "Dev.to", value: devto_engagement, color: "#a855f7" },
-    { name: "Reddit", value: reddit_engagement, color: "#ef4444" },
-  ].filter(d => d.value > 0)
-
-  // Chart 3 - Top Results Data
-  const allResults = [
-    ...stack_results.map(r => ({
-      title: (r.title || "").slice(0, 30) + '...',
-      score: r.score || 0,
-      platform: 'SO',
-      color: '#6366f1'
-    })),
-    ...hn_results.map(r => ({
-      title: (r.title || "").slice(0, 30) + '...',
-      score: r.score || 0,
-      platform: 'HN',
-      color: '#f97316'
-    })),
-    ...devto_results.map(r => ({
-      title: (r.title || "").slice(0, 30) + '...',
-      score: r.reactions || 0,
-      platform: 'DEV',
-      color: '#a855f7'
-    })),
-    ...reddit_results.map(r => ({
-      title: (r.title || "").slice(0, 30) + '...',
-      score: r.post_score || 0,
-      platform: 'R/',
-      color: '#ef4444'
-    })),
-  ]
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 6)
-
-  const hasAnyResults = coverageData.length > 0
-
-  return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      {/* Charts Section */}
-      {hasAnyResults && (
-        <div>
-          <h3 className="text-lg font-semibold mb-4 text-gray-200">📊 Community Data Overview</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            {/* Chart 1 - Source Coverage */}
-            <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-              <p className="text-gray-400 text-xs mb-3">Results per platform</p>
-              <ResponsiveContainer width="100%" height={160}>
-                <BarChart data={coverageData} layout="vertical">
-                  <XAxis type="number" tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                  <YAxis dataKey="platform" type="category" tick={{ fill: '#9ca3af', fontSize: 11 }} width={100} />
-                  <Tooltip
-                    contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: '8px' }}
-                    labelStyle={{ color: '#f9fafb' }}
-                  />
-                  <Bar dataKey="count" radius={[0, 4, 4, 0]}>
-                    {coverageData.map((entry, i) => (
-                      <Cell key={i} fill={entry.fill} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-
-            {/* Chart 2 - Engagement Pie */}
-            <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-              <p className="text-gray-400 text-xs mb-3">Community engagement distribution</p>
-              <ResponsiveContainer width="100%" height={200}>
-                <PieChart>
-                  <Pie
-                    data={engagementData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={55}
-                    outerRadius={80}
-                    paddingAngle={3}
-                    dataKey="value"
-                  >
-                    {engagementData.map((entry, i) => (
-                      <Cell key={i} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: '8px' }}
-                    labelStyle={{ color: '#f9fafb' }}
-                  />
-                  <Legend
-                    formatter={(value) => (
-                      <span style={{ color: '#9ca3af', fontSize: '12px' }}>{value}</span>
-                    )}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-
-            {/* Chart 3 - Top Results */}
-            <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-              <p className="text-gray-400 text-xs mb-3">Top results by community score</p>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={allResults}>
-                  <XAxis
-                    dataKey="title"
-                    tick={{ fill: '#9ca3af', fontSize: 10 }}
-                    interval={0}
-                    angle={-20}
-                    textAnchor="end"
-                    height={60}
-                  />
-                  <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                  <Tooltip
-                    contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: '8px' }}
-                    labelStyle={{ color: '#f9fafb', fontSize: '12px' }}
-                    formatter={(value, name, props) => [value, `Score (${props.payload.platform})`]}
-                  />
-                  <Bar dataKey="score" radius={[4, 4, 0, 0]}>
-                    {allResults.map((entry, i) => (
-                      <Cell key={i} fill={entry.color} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* AI Insights */}
-      {insights && (
-        <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <span>💡</span> Community Insights
-          </h3>
-          <div className="text-gray-300 whitespace-pre-wrap">{insights}</div>
-        </div>
-      )}
-
-      {/* Stack Overflow Cards */}
-      {stack_results.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <span>📚</span> Stack Overflow
-          </h3>
-          {stack_results.map((item, index) => (
-            <div
-              key={index}
-              className="bg-gray-900 rounded-lg p-4 border border-gray-800"
-            >
-              <a
-                href={item.link || item.url}
-                onClick={(e) => {
-                  e.preventDefault()
-                  onOpenLink?.(item.link || item.url, item.title || "Stack Overflow")
-                }}
-                className="text-indigo-400 hover:text-indigo-300 font-medium block mb-2"
-              >
-                {item.title}
-              </a>
-              {item.score !== undefined && (
-                <div className="mt-2 flex items-center gap-4 text-sm text-gray-500">
-                  <span>Score: {item.score}</span>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Hacker News Cards */}
-      {hn_results.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <span>🔶</span> Hacker News
-          </h3>
-          {hn_results.map((item, index) => (
-            <div
-              key={index}
-              className="bg-gray-900 rounded-lg p-4 border border-gray-800"
-            >
-              <a
-                href={item.hn_link || item.url}
-                onClick={(e) => {
-                  e.preventDefault()
-                  onOpenLink?.(item.hn_link || item.url, item.title || "Hacker News")
-                }}
-                className="text-orange-400 hover:text-orange-300 font-medium block mb-2"
-              >
-                {item.title}
-              </a>
-              <div className="mt-2 flex items-center gap-4 text-sm text-gray-500">
-                <span>Score: {item.score}</span>
-                <span>Comments: {item.num_comments}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Dev.to Cards */}
-      {devto_results.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <span>📝</span> Dev.to
-          </h3>
-          {devto_results.map((item, index) => (
-            <div
-              key={index}
-              className="bg-gray-900 rounded-lg p-4 border border-gray-800"
-            >
-              <a
-                href={item.url}
-                onClick={(e) => {
-                  e.preventDefault()
-                  onOpenLink?.(item.url, item.title || "Dev.to")
-                }}
-                className="text-purple-400 hover:text-purple-300 font-medium block mb-2"
-              >
-                {item.title}
-              </a>
-              <p className="text-gray-400 text-sm mb-2">{item.description}</p>
-              <div className="mt-2 flex items-center gap-4 text-sm text-gray-500">
-                <span>❤️ {item.reactions}</span>
-                <span>💬 {item.comments_count}</span>
-                <span>⏱️ {item.reading_time} min</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Reddit Cards */}
-      {reddit_results.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <span>🔴</span> Reddit
-          </h3>
-          {reddit_results.map((item, index) => (
-            <div
-              key={index}
-              className="bg-gray-900 rounded-lg p-4 border border-gray-800"
-            >
-              <a
-                href={item.url}
-                onClick={(e) => {
-                  e.preventDefault()
-                  onOpenLink?.(item.url, item.title || "Reddit")
-                }}
-                className="text-red-400 hover:text-red-300 font-medium block mb-2"
-              >
-                {item.title}
-              </a>
-              <p className="text-gray-500 text-sm mb-2">r/{item.subreddit}</p>
-              <div className="mt-2 flex items-center gap-4 text-sm text-gray-500">
-                <span>Score: {item.post_score}</span>
-                <span>Comments: {item.num_comments}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {!hasAnyResults && !insights && (
-        <p className="text-gray-400">No community results found.</p>
-      )}
-    </div>
-  )
-}
-
-// History Sidebar Component
-function HistorySidebar({ show, onToggle, history, onHistoryClick }) {
-  const modeColors = {
-    seo: 'bg-green-500/20 text-green-400',
-    ai: 'bg-purple-500/20 text-purple-400',
-    community: 'bg-orange-500/20 text-orange-400'
-  }
-
-  return (
-    <>
-      {/* Toggle Button */}
-      <button
-        onClick={onToggle}
-        className="absolute top-0 right-0 m-2 px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors"
-      >
-        {show ? 'Hide' : 'History'}
-      </button>
-
-      {/* Sidebar */}
-      {show && (
-        <div className="w-72 bg-gray-900 border-l border-gray-800 p-4 overflow-y-auto">
-          <h3 className="font-semibold mb-4 text-gray-200">Tab History</h3>
-          {history.length === 0 ? (
-            <p className="text-gray-500 text-sm">No searches yet</p>
-          ) : (
-            <div className="space-y-2">
-              {history.slice().reverse().map((item, index) => (
-                <button
-                  key={index}
-                  onClick={() => onHistoryClick(item)}
-                  className="w-full text-left p-3 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
-                >
-                  <p className="text-sm text-gray-200 truncate mb-1">
-                    {item.query}
-                  </p>
-                  <span className={`text-xs px-2 py-0.5 rounded ${modeColors[item.mode]}`}>
-                    {item.mode}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </>
-  )
-}
-
-// Context Indicator Component
 function ContextIndicator({ tabId, contextManager, onToggleInfo }) {
   const summary = contextManager.getContextSummary(tabId)
-  
-  if (!summary.hasContext) {
-    return (
-      <div className="text-xs text-gray-500 px-3 py-1.5 border border-gray-700 rounded-lg flex items-center gap-2">
-        <span>🧠</span>
-        <span>No context yet</span>
-      </div>
-    )
-  }
-  
+  if (!summary.hasContext) return null
   return (
-    <button
-      onClick={onToggleInfo}
-      className="text-xs px-3 py-1.5 bg-indigo-500/20 text-indigo-400 border border-indigo-500/50 rounded-lg hover:bg-indigo-500/30 transition-colors flex items-center gap-2"
-      title="AI has context from your browsing"
-    >
-      <span>🧠</span>
-      <span>Context: {summary.queryCount} searches, {summary.resultCount} results</span>
+    <button onClick={onToggleInfo} className="text-xs px-3 py-1.5 rounded-full flex items-center gap-2 bg-[rgba(50,121,249,0.06)] text-[var(--action-primary)] hover:bg-[rgba(50,121,249,0.1)] transition-colors border border-[rgba(50,121,249,0.2)] font-medium">
+      <BrainIcon /> Context active ({summary.queryCount})
     </button>
   )
 }
 
-function ContextWindow({
-  show,
-  onClose,
-  tabId,
-  sessionId,
-  sessionStartedAt,
-  sessionStatus,
-  contextManager,
-}) {
-  const [downloadState, setDownloadState] = useState("")
-  const [downloading, setDownloading] = useState(false)
+function ContextWindow({ show, onClose }) {
+  const [chatMessages, setChatMessages] = useState([])
 
   if (!show) return null
 
-  const context = contextManager.getContext(tabId)
-  const summary = contextManager.getContextSummary(tabId)
-  const queries = context.queries || []
-  const results = context.results || []
-  const visitedPages = context.visited_pages || []
+  const handleSend = (text) => {
+    // Optimistically add user message
+    const userMsg = { id: Date.now().toString(), text, sender: 'user' }
+    setChatMessages(prev => [...prev, userMsg])
 
-  async function handleDownloadContext() {
-    setDownloading(true)
-    setDownloadState("")
-    try {
-      const exported = await contextManager.downloadSessionContext(sessionId)
-      setDownloadState(`Downloaded ${exported.filename}`)
-    } catch {
-      setDownloadState("Download failed. Please try again.")
-    } finally {
-      setDownloading(false)
-    }
+    // Mock AI response logic as provided in demo
+    setTimeout(() => {
+      const aiReply = {
+        id: (Date.now() + 1).toString(),
+        text: `I am your Super AI assistant! I see you are looking at context for this session. How can I help you analyze it?`,
+        sender: 'ai'
+      }
+      setChatMessages(prev => [...prev, aiReply])
+    }, 1000)
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-      <div className="w-full max-w-4xl max-h-[85vh] bg-gray-900 border border-gray-700 rounded-xl overflow-hidden shadow-2xl">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700 bg-gray-950">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-100">Context Window</h3>
-            <p className="text-xs text-gray-400 mt-1">
-              Session: {sessionId} • Started: {new Date(sessionStartedAt).toLocaleString()} • Status: {sessionStatus}
-            </p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in-up">
+      <div className="w-full max-w-4xl bg-white rounded-2xl overflow-hidden shadow-2xl scale-100 flex flex-col">
+        <div className="p-5 border-b border-[var(--border-color)] flex justify-between items-center bg-white relative z-20">
+          <div className="flex items-center gap-3">
+            <h3 className="text-lg font-medium tracking-tight">Super AI Context Session</h3>
+            <span className="text-[11px] bg-black text-white px-2 py-0.5 rounded-full">BETA</span>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleDownloadContext}
-              disabled={downloading}
-              className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white"
-            >
-              {downloading ? "Exporting..." : "Download Context JSON"}
-            </button>
-            <button
-              onClick={onClose}
-              className="px-3 py-1.5 text-sm rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-100"
-            >
-              Close
-            </button>
-          </div>
+          <button onClick={onClose} className="btn-secondary px-4 py-1.5 text-sm hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors">Close Session</button>
         </div>
-
-        <div className="p-5 overflow-y-auto max-h-[72vh] space-y-5">
-          {downloadState && (
-            <div className="text-xs text-indigo-300 bg-indigo-500/10 border border-indigo-500/30 rounded-lg px-3 py-2">
-              {downloadState}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
-              <p className="text-gray-400 text-xs">Queries</p>
-              <p className="text-gray-100 text-xl font-semibold">{summary.queryCount}</p>
-            </div>
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
-              <p className="text-gray-400 text-xs">Results</p>
-              <p className="text-gray-100 text-xl font-semibold">{summary.resultCount}</p>
-            </div>
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
-              <p className="text-gray-400 text-xs">Visited Pages</p>
-              <p className="text-gray-100 text-xl font-semibold">{summary.visitedCount}</p>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <h4 className="text-sm font-medium text-indigo-300">Recent Queries</h4>
-            {queries.length === 0 ? (
-              <p className="text-sm text-gray-500">No queries in this session yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {queries.slice(-10).reverse().map((q, idx) => (
-                  <div key={`${q}-${idx}`} className="text-sm text-gray-200 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
-                    {q}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <h4 className="text-sm font-medium text-emerald-300">Recent Results</h4>
-            {results.length === 0 ? (
-              <p className="text-sm text-gray-500">No results stored yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {results.slice(0, 8).map((r, idx) => (
-                  <div key={`${r.url}-${idx}`} className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
-                    <p className="text-sm text-gray-200 font-medium truncate">{r.title || 'Untitled'}</p>
-                    <p className="text-xs text-green-400 truncate">{r.url}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <h4 className="text-sm font-medium text-orange-300">Visited Pages</h4>
-            {visitedPages.length === 0 ? (
-              <p className="text-sm text-gray-500">No visited pages captured yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {visitedPages.slice(-8).reverse().map((page, idx) => (
-                  <div key={`${page.url}-${idx}`} className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
-                    <p className="text-sm text-gray-200 font-medium truncate">{page.title || 'Visited Page'}</p>
-                    <p className="text-xs text-green-400 truncate">{page.url}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function BackendStatusBanner({ status }) {
-  if (!status) return null
-  const isHealthy = status.running
-  return (
-    <div
-      className={`mx-auto mt-1 mb-2 px-3 py-1 rounded text-xs border ${
-        isHealthy
-          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
-          : 'bg-red-500/10 text-red-300 border-red-500/30'
-      }`}
-    >
-      {isHealthy ? `Desktop backend connected (${status.url})` : `Backend issue: ${status.lastError || 'not running'}`}
-    </div>
-  )
-}
-
-function BrowserPanel({ url, title, onPageVisit, onClose }) {
-  const webviewRef = useRef(null)
-  const [address, setAddress] = useState(url)
-  const [canGoBack, setCanGoBack] = useState(false)
-  const [canGoForward, setCanGoForward] = useState(false)
-
-  useEffect(() => {
-    setAddress(url)
-  }, [url])
-
-  useEffect(() => {
-    const wv = webviewRef.current
-    if (!wv) return
-    const onNavigate = () => {
-      setAddress(wv.getURL() || url)
-      setCanGoBack(wv.canGoBack())
-      setCanGoForward(wv.canGoForward())
-      onPageVisit?.(wv.getURL() || url, wv.getTitle?.() || title || "Web Page")
-    }
-    wv.addEventListener('did-navigate', onNavigate)
-    wv.addEventListener('did-navigate-in-page', onNavigate)
-    wv.addEventListener('dom-ready', onNavigate)
-    return () => {
-      wv.removeEventListener('did-navigate', onNavigate)
-      wv.removeEventListener('did-navigate-in-page', onNavigate)
-      wv.removeEventListener('dom-ready', onNavigate)
-    }
-  }, [onPageVisit, title, url])
-
-  const navigateToAddress = () => {
-    const wv = webviewRef.current
-    if (!wv || !address) return
-    const next = /^https?:\/\//i.test(address) ? address : `https://${address}`
-    wv.loadURL(next)
-  }
-
-  return (
-    <div className="h-full w-full flex flex-col overflow-hidden bg-white">
-      <div className="bg-gray-900 px-3 py-2 flex items-center gap-2 border-b border-gray-800">
-        <button
-          onClick={() => webviewRef.current?.goBack()}
-          disabled={!canGoBack}
-          className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-gray-200"
-        >
-          ←
-        </button>
-        <button
-          onClick={() => webviewRef.current?.goForward()}
-          disabled={!canGoForward}
-          className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-gray-200"
-        >
-          →
-        </button>
-        <button
-          onClick={() => webviewRef.current?.reload()}
-          className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
-        >
-          ↻
-        </button>
-        <input
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && navigateToAddress()}
-          className="flex-1 min-w-0 text-sm bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-gray-200"
+        
+        {/* Injecting the AiInput UI here directly */}
+        <AiInput
+          messages={chatMessages}
+          onSendMessage={handleSend}
+          backgroundText="AI Input 001"
+          placeholder="How can I help you analyze this context?"
         />
-        <button
-          onClick={navigateToAddress}
-          className="text-xs px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white"
-        >
-          Go
-        </button>
-        <div className="min-w-0 max-w-[220px] hidden md:block">
-          <p className="text-xs text-gray-400 truncate">{title || 'Web Page'}</p>
-        </div>
-        <button
-          onClick={onClose}
-          className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
-        >
-          Back to Results
-        </button>
       </div>
-      <webview
-        ref={webviewRef}
-        src={url}
-        className="w-full flex-1 bg-white"
-        style={{ minHeight: 0 }}
-        allowpopups="true"
-      />
     </div>
   )
 }
 
-export default App
+function BackendStatusBanner() { return null } // Hidden for minimalist aesthetic
+
+function BrowserPanel({ url, onClose }) {
+  const reloadWebview = () => document.getElementById(`webview-${url}`)?.reload()
+
+  return (
+    <div className="h-full flex flex-col bg-white animate-fade-in-up">
+      <div className="px-4 py-2 border-b border-[var(--border-color)] flex items-center gap-3">
+        <div className="flex items-center gap-1">
+          <button onClick={onClose} className="p-1.5 rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Back"><ChevronLeftIcon /></button>
+          <button disabled className="p-1.5 rounded-full text-[var(--text-secondary)] opacity-30 cursor-not-allowed transition-colors" title="Forward"><ChevronRightIcon /></button>
+          <button onClick={reloadWebview} className="p-1.5 rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Reload"><RefreshIcon /></button>
+        </div>
+        <input value={url} readOnly className="flex-1 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-sm rounded-lg px-3 py-1.5 outline-none text-[var(--text-secondary)]" />
+      </div>
+      <webview id={`webview-${url}`} src={url} className="w-full flex-1" style={{ minHeight: 0 }} allowpopups="true" />
+    </div>
+  )
+}
+
+/* eslint-disable react-hooks/static-components */
+function BrowserMenu({ onClose }) {
+  const menuRef = useRef()
+  useEffect(() => {
+    const handler = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) onClose() }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [onClose])
+
+  const icons = {
+    user: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>,
+    key: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>,
+    history: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>,
+    download: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+    star: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
+    grid: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>,
+    puzzle: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 0-.253.902l.331 2.076c.12.758-.195 1.503-.82 1.961a2.126 2.126 0 0 1-1.282.428h-.197c-.366 0-.715-.145-.968-.398l-1.526-1.526a1.12 1.12 0 0 0-1.428-.15l-1.693 1.13c-.63.42-1.439.467-2.112.122A2.43 2.43 0 0 1 8 18V5c0-1.105.895-2 2-2h4a2 2 0 0 1 2 2v2.586a1 1 0 0 0 .293.707l1.414 1.414c.294.294.767.198.887-.198.24-.76.71-1.464 1.516-1.464H21a1 1 0 0 1 1 1v.707l-2.561.1z"/></svg>,
+    trash: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>,
+    zoom: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+    fullscreen: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>,
+    print: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>,
+    lens: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="12" cy="12" r="3"/><path d="M3 9v6M9 3h6M9 21h6M21 9v6"/></svg>,
+    translate: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 8l6 6"/><path d="M4 14l6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1M22 22l-5-10-5 10"/><path d="M14 18h6"/></svg>,
+    find: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>,
+    cast: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 16v3a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v3"/><path d="M2 12a10 10 0 0 1 10 10"/><path d="M2 8a14 14 0 0 1 14 14"/></svg>,
+    briefcase: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>,
+    help: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+    settings: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+    exit: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
+    window: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/></svg>,
+    incognito: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="7" cy="15" r="3"/><circle cx="17" cy="15" r="3"/><path d="M10 15h4M5 12V9a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v3H5z"/></svg>,
+    empty: <span className="w-4 h-4 inline-block" />
+  }
+
+  const divider = <div className="h-[1px] w-full bg-[var(--border-color)] my-1" />
+
+  const MenuItem = ({ icon, label, shortcut, rightIcon }) => (
+    <button className="w-full flex items-center px-4 py-1.5 text-[13px] hover:bg-[var(--bg-hover)] group transition-colors">
+      <span className="text-[var(--text-tertiary)] mr-3">{icon || icons.empty}</span>
+      <span className="text-[var(--text-primary)] flex-1 text-left">{label}</span>
+      {shortcut && <span className="text-[#9aa0a6] text-[11px] font-medium ml-4">{shortcut}</span>}
+      {rightIcon && <span className="text-[var(--text-tertiary)] ml-3">{rightIcon}</span>}
+    </button>
+  )
+
+  const ProfileMenu = () => (
+    <div className="px-3 py-2 flex items-center bg-[var(--bg-elevated)] mx-2 my-1.5 rounded-lg border border-[var(--border-color)] hover:border-gray-300 transition-colors cursor-pointer group">
+      <div className="w-7 h-7 bg-[var(--border-color)] rounded-full flex items-center justify-center text-[var(--text-secondary)] mr-3">
+        {icons.user}
+      </div>
+      <span className="text-[13px] text-[var(--text-primary)] flex-1 text-left font-medium">Your Browser</span>
+      <span className="text-[11px] bg-[rgba(50,121,249,0.1)] text-[#3279f9] px-2 py-0.5 rounded-md font-medium border border-[rgba(50,121,249,0.2)]">Not signed in</span>
+      <span className="text-[var(--text-tertiary)] ml-2 text-xs opacity-0 group-hover:opacity-100 transition-opacity">▶</span>
+    </div>
+  )
+
+  const ZoomControl = () => (
+    <div className="w-full flex items-center px-4 py-1.5 text-[13px] hover:bg-[var(--bg-hover)] transition-colors">
+      <span className="text-[var(--text-tertiary)] mr-3">{icons.zoom}</span>
+      <span className="text-[var(--text-primary)] flex-1 text-left">Zoom</span>
+      <div className="flex items-center ml-4 border border-[var(--border-color)] rounded-md overflow-hidden bg-white">
+        <button className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">−</button>
+        <div className="w-[1px] h-4 bg-[var(--border-color)]"></div>
+        <span className="px-2 text-[12px] font-medium text-[var(--text-primary)]">100%</span>
+        <div className="w-[1px] h-4 bg-[var(--border-color)]"></div>
+        <button className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">+</button>
+      </div>
+      <button className="ml-3 p-1 rounded-md border border-[var(--border-color)] bg-white hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]">
+        {icons.fullscreen}
+      </button>
+    </div>
+  )
+
+  return (
+    <div ref={menuRef} className="absolute top-[44px] right-0 w-[300px] bg-white border border-[var(--border-color)] shadow-2xl rounded-bl-xl py-1 z-50 animate-fade-in-up origin-top-right">
+      <MenuItem icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>} label="New tab" shortcut="Ctrl+T" />
+      <MenuItem icon={icons.window} label="New window" shortcut="Ctrl+N" />
+      <MenuItem icon={icons.incognito} label="New Incognito window" shortcut="Ctrl+Shift+N" />
+      
+      {divider}
+      <ProfileMenu />
+      {divider}
+
+      <MenuItem icon={icons.key} label="Passwords and autofill" rightIcon="▶" />
+      <MenuItem icon={icons.history} label="History" rightIcon="▶" />
+      <MenuItem icon={icons.download} label="Downloads" shortcut="Ctrl+J" />
+      <MenuItem icon={icons.star} label="Bookmarks and lists" rightIcon="▶" />
+      <MenuItem icon={icons.grid} label="Tab groups" rightIcon="▶" />
+      <MenuItem icon={icons.puzzle} label="Extensions" rightIcon="▶" />
+      <MenuItem icon={icons.trash} label="Delete browsing data..." shortcut="Ctrl+Shift+Del" />
+
+      {divider}
+      <ZoomControl />
+      {divider}
+
+      <MenuItem icon={icons.print} label="Print..." shortcut="Ctrl+P" />
+      <MenuItem icon={icons.lens} label="Search with Google Lens" />
+      <MenuItem icon={icons.translate} label="Translate..." />
+      <MenuItem icon={icons.find} label="Find and edit" rightIcon="▶" />
+      <MenuItem icon={icons.cast} label="Cast, save, and share" rightIcon="▶" />
+      <MenuItem icon={icons.briefcase} label="More tools" rightIcon="▶" />
+
+      {divider}
+      <MenuItem icon={icons.help} label="Help" rightIcon="▶" />
+      <MenuItem icon={icons.settings} label="Settings" />
+      <MenuItem icon={icons.exit} label="Exit" />
+    </div>
+  )
+}
+/* eslint-enable react-hooks/static-components */

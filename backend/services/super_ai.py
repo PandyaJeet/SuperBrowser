@@ -67,16 +67,16 @@ def format_context_for_ai(context: Optional[Dict]) -> str:
     """Format browsing context into a readable string for the AI"""
     if not context:
         return "No browsing context provided."
-    
+
     formatted = []
-    
+
     # Add previous queries
     if "queries" in context and context["queries"]:
         formatted.append("## Previous Searches:")
         for idx, q in enumerate(context["queries"][-5:], 1):  # Last 5 queries
             formatted.append(f"{idx}. \"{q}\"")
         formatted.append("")
-    
+
     # Add search results context
     if "results" in context and context["results"]:
         formatted.append("## Recent Search Results:")
@@ -90,7 +90,7 @@ def format_context_for_ai(context: Optional[Dict]) -> str:
             if url:
                 formatted.append(f"   URL: {url}")
             formatted.append("")
-    
+
     # Add visited pages content
     if "visited_pages" in context and context["visited_pages"]:
         formatted.append("## Content from Visited Pages:")
@@ -102,7 +102,7 @@ def format_context_for_ai(context: Optional[Dict]) -> str:
                 # Take first 500 chars of content
                 formatted.append(f"   {content[:500]}...")
             formatted.append("")
-    
+
     return "\n".join(formatted) if formatted else "No significant context available."
 
 
@@ -110,7 +110,7 @@ async def get_ai_consensus(query: str, context: Optional[Dict] = None, persona: 
     """Get AI-generated consensus answer using the specified persona and browsing context."""
     normalized_persona = (persona or "default").strip().lower()
     persona_config = get_persona(normalized_persona)
-    
+
     # Format context for the AI
     context_str = format_context_for_ai(context)
 
