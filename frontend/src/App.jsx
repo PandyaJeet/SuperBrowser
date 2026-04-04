@@ -17,7 +17,7 @@ const PERSONAS = [
 const API_BASE = getApiBase()
 
 // Helper to create a new tab object
-function createNewTab() {
+function createNewTab(sessionId = null) {
   return {
     id: crypto.randomUUID(),
     title: "New Tab",
@@ -26,7 +26,7 @@ function createNewTab() {
     results: null,
     loading: false,
     error: null,
-    sessionId: crypto.randomUUID(),
+    sessionId: sessionId || crypto.randomUUID(),
     history: [],
     browserUrl: "",
     browserTitle: ""
@@ -34,7 +34,10 @@ function createNewTab() {
 }
 
 function App() {
-  const [tabs, setTabs] = useState([createNewTab()])
+  const [appSessionId] = useState(() => crypto.randomUUID())
+  const [sessionStartedAt] = useState(() => new Date().toISOString())
+  const [sessionStatus, setSessionStatus] = useState("starting")
+  const [tabs, setTabs] = useState(() => [createNewTab(appSessionId)])
   const [activeTabId, setActiveTabId] = useState(tabs[0].id)
   const [showHistory, setShowHistory] = useState(false)
   const [persona, setPersona] = useState("default")
@@ -52,6 +55,28 @@ function App() {
     window.superBrowserDesktop.backend.getStatus().then(setBackendStatus).catch(() => {})
   }, [])
 
+  const {
+    startSession: startContextSession,
+    stopSession: stopContextSession
+  } = contextManager
+
+  useEffect(() => {
+    startContextSession(appSessionId)
+      .then(() => setSessionStatus("active"))
+      .catch(() => setSessionStatus("error"))
+
+    const handleStopSession = () => {
+      stopContextSession(appSessionId, { keepalive: true }).catch(() => {})
+      setSessionStatus("stopped")
+    }
+
+    window.addEventListener("beforeunload", handleStopSession)
+    return () => {
+      window.removeEventListener("beforeunload", handleStopSession)
+      handleStopSession()
+    }
+  }, [appSessionId, startContextSession, stopContextSession])
+
   const updateTab = useCallback((tabId, updates) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t))
   }, [])
@@ -66,7 +91,10 @@ function App() {
     // For AI mode, use contextual endpoint if we have context
     if (tabData.activeMode === 'ai') {
       const context = contextManager.getAIContext(tabId)
-      const hasContext = context.queries.length > 0 || context.results.length > 0
+      const hasContext =
+        context.queries.length > 0 ||
+        context.results.length > 0 ||
+        context.visited_pages.length > 0
       
       if (hasContext) {
         // Use POST endpoint with context
@@ -166,7 +194,7 @@ function App() {
   }, [activeTabId, performSearch, persona])
 
   function handleAddTab() {
-    const newTab = createNewTab()
+    const newTab = createNewTab(appSessionId)
     setTabs(prev => [...prev, newTab])
     setActiveTabId(newTab.id)
   }
@@ -175,7 +203,7 @@ function App() {
     e.stopPropagation()
     if (tabs.length === 1) {
       // Reset the only tab instead of closing
-      const resetTab = createNewTab()
+      const resetTab = createNewTab(appSessionId)
       resetTab.id = tabs[0].id
       setTabs([resetTab])
       return
@@ -206,7 +234,7 @@ function App() {
 
   function openInAppUrl(url, title = "Web Page") {
     if (!url) return
-    const browserTab = createNewTab()
+    const browserTab = createNewTab(appSessionId)
     browserTab.browserUrl = url
     browserTab.browserTitle = title
     browserTab.title = (title || "Web").slice(0, 25)
@@ -292,6 +320,16 @@ function App() {
               <BrowserPanel
                 url={activeTab.browserUrl}
                 title={activeTab.browserTitle}
+                onPageVisit={(visitedUrl, visitedTitle) => {
+                  if (!activeTab) return
+                  contextManager.addVisitedPage(
+                    activeTabId,
+                    activeTab.sessionId,
+                    visitedUrl,
+                    visitedTitle || "Visited Page",
+                    `Visited: ${visitedUrl}`
+                  )
+                }}
                 onClose={() => updateTab(activeTabId, { browserUrl: "", browserTitle: "" })}
               />
             ) : !activeTab?.results && !activeTab?.query ? (
@@ -317,6 +355,16 @@ function App() {
           )}
         </div>
       </div>
+
+      <ContextWindow
+        show={showContextInfo}
+        onClose={() => setShowContextInfo(false)}
+        tabId={activeTabId}
+        sessionId={appSessionId}
+        sessionStartedAt={sessionStartedAt}
+        sessionStatus={sessionStatus}
+        contextManager={contextManager}
+      />
     </div>
   )
 }
@@ -964,6 +1012,140 @@ function ContextIndicator({ tabId, contextManager, onToggleInfo }) {
   )
 }
 
+function ContextWindow({
+  show,
+  onClose,
+  tabId,
+  sessionId,
+  sessionStartedAt,
+  sessionStatus,
+  contextManager,
+}) {
+  const [downloadState, setDownloadState] = useState("")
+  const [downloading, setDownloading] = useState(false)
+
+  if (!show) return null
+
+  const context = contextManager.getContext(tabId)
+  const summary = contextManager.getContextSummary(tabId)
+  const queries = context.queries || []
+  const results = context.results || []
+  const visitedPages = context.visited_pages || []
+
+  async function handleDownloadContext() {
+    setDownloading(true)
+    setDownloadState("")
+    try {
+      const exported = await contextManager.downloadSessionContext(sessionId)
+      setDownloadState(`Downloaded ${exported.filename}`)
+    } catch {
+      setDownloadState("Download failed. Please try again.")
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+      <div className="w-full max-w-4xl max-h-[85vh] bg-gray-900 border border-gray-700 rounded-xl overflow-hidden shadow-2xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700 bg-gray-950">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-100">Context Window</h3>
+            <p className="text-xs text-gray-400 mt-1">
+              Session: {sessionId} • Started: {new Date(sessionStartedAt).toLocaleString()} • Status: {sessionStatus}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleDownloadContext}
+              disabled={downloading}
+              className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white"
+            >
+              {downloading ? "Exporting..." : "Download Context JSON"}
+            </button>
+            <button
+              onClick={onClose}
+              className="px-3 py-1.5 text-sm rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-100"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+
+        <div className="p-5 overflow-y-auto max-h-[72vh] space-y-5">
+          {downloadState && (
+            <div className="text-xs text-indigo-300 bg-indigo-500/10 border border-indigo-500/30 rounded-lg px-3 py-2">
+              {downloadState}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+              <p className="text-gray-400 text-xs">Queries</p>
+              <p className="text-gray-100 text-xl font-semibold">{summary.queryCount}</p>
+            </div>
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+              <p className="text-gray-400 text-xs">Results</p>
+              <p className="text-gray-100 text-xl font-semibold">{summary.resultCount}</p>
+            </div>
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+              <p className="text-gray-400 text-xs">Visited Pages</p>
+              <p className="text-gray-100 text-xl font-semibold">{summary.visitedCount}</p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-medium text-indigo-300">Recent Queries</h4>
+            {queries.length === 0 ? (
+              <p className="text-sm text-gray-500">No queries in this session yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {queries.slice(-10).reverse().map((q, idx) => (
+                  <div key={`${q}-${idx}`} className="text-sm text-gray-200 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+                    {q}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-medium text-emerald-300">Recent Results</h4>
+            {results.length === 0 ? (
+              <p className="text-sm text-gray-500">No results stored yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {results.slice(0, 8).map((r, idx) => (
+                  <div key={`${r.url}-${idx}`} className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+                    <p className="text-sm text-gray-200 font-medium truncate">{r.title || 'Untitled'}</p>
+                    <p className="text-xs text-green-400 truncate">{r.url}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-medium text-orange-300">Visited Pages</h4>
+            {visitedPages.length === 0 ? (
+              <p className="text-sm text-gray-500">No visited pages captured yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {visitedPages.slice(-8).reverse().map((page, idx) => (
+                  <div key={`${page.url}-${idx}`} className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+                    <p className="text-sm text-gray-200 font-medium truncate">{page.title || 'Visited Page'}</p>
+                    <p className="text-xs text-green-400 truncate">{page.url}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function BackendStatusBanner({ status }) {
   if (!status) return null
   const isHealthy = status.running
@@ -980,7 +1162,7 @@ function BackendStatusBanner({ status }) {
   )
 }
 
-function BrowserPanel({ url, title, onClose }) {
+function BrowserPanel({ url, title, onPageVisit, onClose }) {
   const webviewRef = useRef(null)
   const [address, setAddress] = useState(url)
   const [canGoBack, setCanGoBack] = useState(false)
@@ -997,6 +1179,7 @@ function BrowserPanel({ url, title, onClose }) {
       setAddress(wv.getURL() || url)
       setCanGoBack(wv.canGoBack())
       setCanGoForward(wv.canGoForward())
+      onPageVisit?.(wv.getURL() || url, wv.getTitle?.() || title || "Web Page")
     }
     wv.addEventListener('did-navigate', onNavigate)
     wv.addEventListener('did-navigate-in-page', onNavigate)
@@ -1006,7 +1189,7 @@ function BrowserPanel({ url, title, onClose }) {
       wv.removeEventListener('did-navigate-in-page', onNavigate)
       wv.removeEventListener('dom-ready', onNavigate)
     }
-  }, [url])
+  }, [onPageVisit, title, url])
 
   const navigateToAddress = () => {
     const wv = webviewRef.current

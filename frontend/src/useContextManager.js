@@ -24,6 +24,28 @@ export function useContextManager() {
     }
   }, []);
 
+  const startSession = useCallback(async (sessionId) => {
+    if (!sessionId) return null
+    const res = await fetch(`${API_BASE}/api/context/session/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId })
+    })
+    if (!res.ok) throw new Error(`Failed to start session: ${res.status}`)
+    return res.json()
+  }, [])
+
+  const stopSession = useCallback(async (sessionId, options = {}) => {
+    if (!sessionId) return null
+    const { keepalive = false } = options
+    const res = await fetch(`${API_BASE}/api/context/session/stop/${sessionId}`, {
+      method: 'POST',
+      keepalive
+    })
+    if (!res.ok) throw new Error(`Failed to stop session: ${res.status}`)
+    return res.json()
+  }, [])
+
   // Add a query to tab context
   const addQuery = useCallback((tabId, sessionId, query, mode) => {
     initializeTab(tabId, sessionId);
@@ -73,10 +95,15 @@ export function useContextManager() {
     initializeTab(tabId, sessionId);
     
     const context = contextStore.current[tabId];
+    const lastPage = context.visited_pages[context.visited_pages.length - 1]
+    if (lastPage?.url === url) {
+      return
+    }
+
     const page = {
       url,
       title,
-      content: content.substring(0, 5000), // Limit content size
+      content: (content || '').substring(0, 5000), // Limit content size
       timestamp: new Date().toISOString()
     };
     
@@ -143,6 +170,43 @@ export function useContextManager() {
     return res.json();
   }, []);
 
+  const fetchSessionContext = useCallback(async (sessionId) => {
+    if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.getSession) {
+      try {
+        const data = await window.superBrowserDesktop.context.getSession(sessionId)
+        return data
+      } catch {
+        // fallback to HTTP
+      }
+    }
+
+    const res = await fetch(`${API_BASE}/api/context/session/${sessionId}`)
+    if (!res.ok) throw new Error(`Failed to fetch session context: ${res.status}`)
+    return res.json()
+  }, [])
+
+  const downloadSessionContext = useCallback(async (sessionId) => {
+    const res = await fetch(`${API_BASE}/api/context/export/${sessionId}`)
+    if (!res.ok) throw new Error(`Failed to export session context: ${res.status}`)
+
+    const data = await res.json()
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const safeSession = (sessionId || 'session').slice(0, 8)
+    const filename = `superbrowser-context-${safeSession}-${timestamp}.json`
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const objectUrl = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    URL.revokeObjectURL(objectUrl)
+
+    return { filename, stats: data?.stats || {} }
+  }, [])
+
   // Get context summary (for UI display)
   const getContextSummary = useCallback((tabId) => {
     const context = getContext(tabId);
@@ -155,6 +219,8 @@ export function useContextManager() {
   }, [getContext]);
 
   return {
+    startSession,
+    stopSession,
     initializeTab,
     addQuery,
     addResults,
@@ -163,6 +229,8 @@ export function useContextManager() {
     getAIContext,
     clearTabContext,
     getContextSummary,
-    fetchTabContext
+    fetchTabContext,
+    fetchSessionContext,
+    downloadSessionContext
   };
 }

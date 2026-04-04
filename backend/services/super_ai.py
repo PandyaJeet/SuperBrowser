@@ -1,6 +1,66 @@
+from typing import Dict, Optional
+
 from services.groq_service import ask_groq
 from services.personas import get_persona
-from typing import Dict, Optional
+
+
+DEFAULT_SUPERAI_MODEL = "llama-3.1-8b-instant"
+
+DEFAULT_SUPERAI_SYSTEM_PROMPT = (
+    "You are SuperAI, a neutral synthesis assistant. "
+    "In default mode, summarize all provided user context accurately without persona styling. "
+    "Prioritize factual consolidation, deduplication, and clarity. "
+    "If context is incomplete or conflicting, state that explicitly."
+)
+
+
+def _build_persona_prompt(query: str, context_str: str) -> str:
+    return f"""Based on the user's browsing history and context below, provide a comprehensive answer to their query.
+
+Query: {query}
+
+## Browsing Context:
+{context_str}
+
+Please provide:
+1. A concise summary (2-3 sentences)
+2. Key points and details
+3. Any relevant caveats or considerations
+
+If the browsing context is relevant to the query, reference it in your answer to show contextual awareness.
+"""
+
+
+def _build_default_summary_prompt(query: str, context: Optional[Dict], context_str: str) -> str:
+    query_count = len(context.get("queries", [])) if context else 0
+    result_count = len(context.get("results", [])) if context else 0
+    visited_count = len(context.get("visited_pages", [])) if context else 0
+
+    return f"""Create a reliable default SuperAI summary from ALL available context.
+
+User Query:
+{query}
+
+Context Stats:
+- Previous searches: {query_count}
+- Recent results: {result_count}
+- Visited pages: {visited_count}
+
+Context Details:
+{context_str}
+
+Output format (in this exact order):
+1) Overall Summary: 3-5 bullet points that synthesize all major themes found across the context.
+2) Direct Answer: a concise answer to the user query, grounded in the context.
+3) Evidence Highlights: 4-8 short bullets with concrete supporting points from the context.
+4) Gaps or Uncertainty: mention missing/conflicting information briefly.
+5) Next Actions: up to 3 practical follow-up checks/searches.
+
+Rules:
+- Do not imitate any persona in this mode.
+- Do not invent facts not present in the context.
+- Merge duplicates and avoid repeating near-identical points.
+"""
 
 
 def format_context_for_ai(context: Optional[Dict]) -> str:
@@ -48,37 +108,36 @@ def format_context_for_ai(context: Optional[Dict]) -> str:
 
 async def get_ai_consensus(query: str, context: Optional[Dict] = None, persona: str = "default") -> dict:
     """Get AI-generated consensus answer using the specified persona and browsing context."""
-    persona_config = get_persona(persona)
+    normalized_persona = (persona or "default").strip().lower()
+    persona_config = get_persona(normalized_persona)
     
     # Format context for the AI
     context_str = format_context_for_ai(context)
-    
-    prompt = f"""Based on the user's browsing history and context below, provide a comprehensive answer to their query.
 
-Query: {query}
+    use_default_summary = normalized_persona == "default" or persona_config.get("label") == "Default"
 
-## Browsing Context:
-{context_str}
-
-Please provide:
-1. A concise summary (2-3 sentences)
-2. Key points and details
-3. Any relevant caveats or considerations
-
-If the browsing context is relevant to the query, reference it in your answer to show contextual awareness.
-"""
+    if use_default_summary:
+        model = DEFAULT_SUPERAI_MODEL
+        system_prompt = DEFAULT_SUPERAI_SYSTEM_PROMPT
+        prompt = _build_default_summary_prompt(query, context, context_str)
+        persona_used = "SuperAI Default Summary"
+    else:
+        model = persona_config["model"]
+        system_prompt = persona_config["system_prompt"]
+        prompt = _build_persona_prompt(query, context_str)
+        persona_used = persona_config["label"]
 
     answer = await ask_groq(
         prompt=prompt,
-        model=persona_config["model"],
-        system_prompt=persona_config["system_prompt"],
+        model=model,
+        system_prompt=system_prompt,
     )
 
     return {
         "query": query,
         "answer": answer,
-        "persona_used": persona_config["label"],
-        "model_used": persona_config["model"],
+        "persona_used": persona_used,
+        "model_used": model,
         "context_used": bool(context),
         "status": "success",
     }

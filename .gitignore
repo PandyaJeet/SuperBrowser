@@ -40,5 +40,9 @@ yarn-error.log*
 # Build
 build/
 *.egg-info/
+
+# Packaged desktop artifacts
 frontend/release/
-frontend/win-unpacked/
+backend/superbrowser-backend.exe
+backend/.pyi-build/
+backend/*.spec
