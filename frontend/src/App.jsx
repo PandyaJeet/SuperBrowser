@@ -6,6 +6,7 @@ const LazyCommunityResults = lazy(() => import('./components/CommunityResults'))
 const LazyBackgroundOrb = lazy(() => import('./components/BackgroundOrb'))
 import { ContinuousPaginationDemo } from './components/ContinuousPagination'
 import { AiInput } from './components/AiInput'
+import { ProductCarousel } from './components/ProductCarousel'
 
 const PERSONAS = [
   { id: "default",    label: "Default",     desc: "Raw Groq"            },
@@ -58,21 +59,34 @@ const ClockIcon = () => (
 const ChevronLeftIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
 const ChevronRightIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
 const RefreshIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+const HomeIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+const ChevronDownIcon = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
 
 export default function App() {
   const [appSessionId] = useState(() => crypto.randomUUID())
   const [sessionStartedAt] = useState(() => new Date().toISOString())
   const [sessionStatus, setSessionStatus] = useState("starting")
-  const [tabs, setTabs] = useState(() => [createNewTab(appSessionId)])
-  const [activeTabId, setActiveTabId] = useState(tabs[0].id)
+  const [tabsState] = useState(() => {
+    const initialTab = createNewTab()
+    return { tabs: [initialTab], activeId: initialTab.id }
+  })
+  const [tabs, setTabs] = useState(tabsState.tabs)
+  const [activeTabId, setActiveTabId] = useState(tabsState.activeId)
   const [showHistory, setShowHistory] = useState(false)
+  const [showPricing, setShowPricing] = useState(false)
   const [persona, setPersona] = useState("default")
   const [showContextInfo, setShowContextInfo] = useState(false)
   const [backendStatus, setBackendStatus] = useState(null)
+  const [userRegion] = useState(() => {
+    try {
+      const lang = navigator.language || navigator.userLanguage || 'en-US'
+      const parts = lang.split('-')
+      return parts.length > 1 ? parts[1].toLowerCase() : 'us'
+    } catch { return 'us' }
+  })
   
   const searchControllersRef = useRef({})
   const contextManager = useContextManager()
-  const { startSession, stopSession: stopContextSession } = contextManager
   const activeTab = tabs.find(t => t.id === activeTabId)
   
   const isBrowserTab = Boolean(activeTab?.browserUrl)
@@ -85,16 +99,16 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    startSession(appSessionId)
+    contextManager.startSession(appSessionId)
       .then(() => setSessionStatus("active"))
       .catch(() => setSessionStatus("error"))
     const stopSession = () => {
-      stopContextSession(appSessionId, { keepalive: true }).catch(() => {})
+      contextManager.stopSession(appSessionId, { keepalive: true }).catch(() => {})
       setSessionStatus("stopped")
     }
     window.addEventListener("beforeunload", stopSession)
     return () => { window.removeEventListener("beforeunload", stopSession); stopSession() }
-  }, [appSessionId, startSession, stopContextSession])
+  }, [appSessionId, contextManager.startSession, contextManager.stopSession])
 
   const updateTab = useCallback((tabId, updates) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t))
@@ -106,30 +120,13 @@ export default function App() {
     if (prev) prev.abort()
     const controller = new AbortController()
     searchControllersRef.current[tabId] = controller
-    const parseApiResponse = async (response) => {
-      let payload = null
-      try {
-        payload = await response.json()
-      } catch {
-        payload = null
-      }
-
-      if (!response.ok) {
-        const detail = payload?.detail || payload?.error || `HTTP ${response.status}`
-        throw new Error(String(detail))
-      }
-
-      return payload
-    }
-
     const onSuccess = (data) => {
       setTabs(p => p.map(t => t.id === tabId ? { ...t, results: data, loading: false } : t))
       if (Array.isArray(data?.results) && data.results.length > 0) contextManager.addResults(tabId, tabData.sessionId, data.results)
     }
     const onError = (error) => {
       if (error?.name === 'AbortError') return
-      const message = error?.message ? `Search failed: ${error.message}` : "Search failed. Please try again."
-      setTabs(p => p.map(t => t.id === tabId ? { ...t, error: message, loading: false } : t))
+      setTabs(p => p.map(t => t.id === tabId ? { ...t, error: "Search failed. Please try again.", loading: false } : t))
     }
     const onDone = () => { if (searchControllersRef.current[tabId] === controller) delete searchControllersRef.current[tabId] }
     
@@ -137,14 +134,14 @@ export default function App() {
       const context = contextManager.getAIContext(tabId)
       const hasContext = context.queries.length > 0 || context.results.length > 0 || context.visited_pages.length > 0
       if (hasContext) {
-        fetch(`${API_BASE}/api/search/ai/contextual`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ query: tabData.query, persona: searchPersona, context }) })
-          .then(parseApiResponse).then(onSuccess).catch(onError).finally(onDone)
+        fetch(`${API_BASE}/api/search/ai/contextual`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ query: tabData.query, persona: searchPersona, context, region: userRegion }) })
+          .then(r => r.json()).then(onSuccess).catch(onError).finally(onDone)
         return
       }
     }
-    let url = `${API_BASE}${endpoints[tabData.activeMode]}?q=${encodeURIComponent(tabData.query)}&session_id=${tabData.sessionId}`
+    let url = `${API_BASE}${endpoints[tabData.activeMode]}?q=${encodeURIComponent(tabData.query)}&session_id=${tabData.sessionId}&gl=${userRegion}`
     if (tabData.activeMode === 'ai') url += `&persona=${searchPersona}`
-    fetch(url, { signal: controller.signal }).then(parseApiResponse).then(onSuccess).catch(onError).finally(onDone)
+    fetch(url, { signal: controller.signal }).then(r => r.json()).then(onSuccess).catch(onError).finally(onDone)
   }, [contextManager])
 
   const handleSearch = useCallback((tabId, searchPersona = "default") => {
@@ -174,7 +171,19 @@ export default function App() {
     })
   }, [activeTabId, performSearch, persona])
 
-  function handleAddTab() { const n = createNewTab(appSessionId); setTabs(p => [...p, n]); setActiveTabId(n.id) }
+  function handleAddTab() {
+    console.log('handleAddTab called, appSessionId:', appSessionId)
+    const n = createNewTab(appSessionId)
+    console.log('New tab created:', n)
+    setTabs(prevTabs => {
+      console.log('Previous tabs:', prevTabs.length)
+      const newTabs = [...prevTabs, n]
+      console.log('New tabs count:', newTabs.length)
+      return newTabs
+    })
+    setActiveTabId(n.id)
+    console.log('Setting activeTabId to:', n.id)
+  }
   function handleCloseTab(tabId, e) {
     e.stopPropagation()
     if (tabs.length === 1) { const r = createNewTab(appSessionId); r.id = tabs[0].id; setTabs([r]); return }
@@ -188,6 +197,9 @@ export default function App() {
     setTabs(p => [...p, bt]); setActiveTabId(bt.id)
     if (activeTab) contextManager.addVisitedPage(activeTabId, activeTab.sessionId, url, title, `Visited: ${url}`)
   }
+  function goHome() {
+    updateTab(activeTabId, { query: "", results: null, loading: false, error: null, browserUrl: "", browserTitle: "" })
+  }
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-transparent text-[var(--text-primary)] relative z-10">
@@ -196,7 +208,15 @@ export default function App() {
       </Suspense>
 
       {/* Hand-drawn style Tab Bar */}
-      <TabBar tabs={tabs} activeTabId={activeTabId} onTabClick={setActiveTabId} onCloseTab={handleCloseTab} onAddTab={handleAddTab} />
+      <TabBar
+        tabs={tabs}
+        activeTabId={activeTabId}
+        onTabClick={(tabId) => { setShowPricing(false); setActiveTabId(tabId) }}
+        onCloseTab={handleCloseTab}
+        onAddTab={() => { setShowPricing(false); handleAddTab() }}
+        onShowHistory={() => { setShowPricing(false); setShowHistory(true) }}
+        onOpenPricing={() => { setShowHistory(false); setShowPricing(true) }}
+      />
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-h-0 relative">
@@ -241,16 +261,16 @@ export default function App() {
           /* Active Search View */
           <div className="flex-1 flex flex-col min-h-0 bg-white shadow-xl relative z-10">
             {/* Minimalist Top Header */}
-            <div className="px-6 py-3 border-b border-[var(--border-color)] flex items-center gap-6 bg-white">
+            <div className="px-6 py-3 border-b border-[var(--border-color)] flex items-center gap-4 bg-white">
                {/* Browser Navigation Controls */}
-               <div className="flex items-center gap-1 -mr-2">
+               <div className="flex items-center gap-1">
                  <button onClick={() => {
                    if (activeTab?.history && activeTab.history.length > 1) {
                      const prev = activeTab.history[activeTab.history.length - 2];
                      updateTab(activeTabId, { query: prev.query, activeMode: prev.mode, history: activeTab.history.slice(0, -1) });
                      setTimeout(() => handleSearch(activeTabId, persona), 0);
                    } else {
-                     updateTab(activeTabId, { query: "", results: null, loading: false });
+                     goHome();
                    }
                  }} className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Back">
                    <ChevronLeftIcon />
@@ -261,6 +281,9 @@ export default function App() {
                  <button onClick={() => { if (activeTab?.query) handleSearch(activeTabId, persona) }} className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Reload">
                    <RefreshIcon />
                  </button>
+                 <button onClick={goHome} className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Home">
+                   <HomeIcon />
+                 </button>
                </div>
 
                <div className="pill-search flex items-center px-5 py-2.5 flex-1 max-w-3xl">
@@ -268,14 +291,21 @@ export default function App() {
                   <input type="text" value={activeTab?.query || ''} 
                     onChange={(e) => updateTab(activeTabId, { query: e.target.value })} 
                     onKeyDown={(e) => e.key === 'Enter' && handleSearch(activeTabId, persona)}
+                    placeholder="Search..."
                     className="flex-1 ml-3 outline-none text-base bg-transparent text-[var(--text-primary)]" />
+                  <button 
+                    onClick={() => handleSearch(activeTabId, persona)} 
+                    disabled={!activeTab?.query?.trim() || activeTab?.loading}
+                    className="ml-2 px-4 py-1.5 rounded-full bg-[var(--action-primary)] text-white text-sm font-medium hover:bg-[var(--action-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Search
+                  </button>
                </div>
                <div className="flex items-center gap-2">
                  <button onClick={() => handleModeChange('seo')} className={`pill-btn px-4 py-1.5 ${activeTab?.activeMode === 'seo' ? 'active' : ''}`}>SEO</button>
                  <button onClick={() => handleModeChange('ai')} className={`pill-btn px-4 py-1.5 ${activeTab?.activeMode === 'ai' ? 'active' : ''}`}>AI</button>
                  <button onClick={() => handleModeChange('community')} className={`pill-btn px-4 py-1.5 ${activeTab?.activeMode === 'community' ? 'active' : ''}`}>REVIEW</button>
                </div>
-               <button onClick={() => setShowHistory(!showHistory)} className="btn-secondary px-4 py-1.5 text-sm ml-auto flex items-center gap-2"><ClockIcon /> History</button>
             </div>
             
             {/* Content Area */}
@@ -288,21 +318,22 @@ export default function App() {
                    <div className="max-w-4xl mx-auto mb-6 flex justify-between items-center">
                      <div className="flex items-center gap-3">
                        <span className="text-sm font-medium text-[var(--text-secondary)]">Persona:</span>
-                       <select value={persona} onChange={e => setPersona(e.target.value)} className="bg-white border border-[var(--border-color)] rounded-md px-3 py-1.5 text-sm outline-none cursor-pointer">
-                         {PERSONAS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-                       </select>
+                       <PersonaDropdown value={persona} onChange={setPersona} personas={PERSONAS} />
                      </div>
                      <ContextIndicator tabId={activeTabId} contextManager={contextManager} onToggleInfo={() => setShowContextInfo(!showContextInfo)} />
                    </div>
                  )}
 
-                 <ResultsPanel mode={activeTab?.activeMode} results={activeTab?.results} loading={activeTab?.loading} onOpenLink={openInAppUrl} />
+                 <ResultsPanel mode={activeTab?.activeMode} results={activeTab?.results} loading={activeTab?.loading} onOpenLink={openInAppUrl} query={activeTab?.query} />
                </div>
                
-               {/* History Panel Sidebar */}
+               {/* History Panel Sidebar - Now accessed via browser menu */}
                {showHistory && (
                  <div className="w-80 border-l border-[var(--border-color)] bg-white p-4 overflow-y-auto">
-                   <h3 className="font-semibold mb-4 text-[var(--text-primary)]">Tab History</h3>
+                   <div className="flex items-center justify-between mb-4">
+                     <h3 className="font-semibold text-[var(--text-primary)]">Tab History</h3>
+                     <button onClick={() => setShowHistory(false)} className="p-1 rounded hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)]"><XIcon /></button>
+                   </div>
                    <div className="space-y-2">
                      {activeTab?.history?.slice().reverse().map((item, i) => (
                        <button key={i} onClick={() => handleHistoryClick(item)} className="w-full text-left p-3 rounded-lg border border-[var(--border-color)] hover:border-[var(--border-hover)] hover:bg-[var(--bg-hover)] transition-colors">
@@ -318,6 +349,7 @@ export default function App() {
         )}
       </div>
 
+      {showPricing && <PricingPage onClose={() => setShowPricing(false)} />}
       <ContextWindow show={showContextInfo} onClose={() => setShowContextInfo(false)} tabId={activeTabId} sessionId={appSessionId} sessionStartedAt={sessionStartedAt} sessionStatus={sessionStatus} contextManager={contextManager} />
     </div>
   )
@@ -325,7 +357,7 @@ export default function App() {
 
 /* ── UI Components ── */
 
-function TabBar({ tabs, activeTabId, onTabClick, onCloseTab, onAddTab }) {
+function TabBar({ tabs, activeTabId, onTabClick, onCloseTab, onAddTab, onShowHistory, onOpenPricing }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   return (
     <div className="flex border-b border-[var(--border-color)] w-full bg-white select-none" style={{ height: '44px' }}>
@@ -339,7 +371,7 @@ function TabBar({ tabs, activeTabId, onTabClick, onCloseTab, onAddTab }) {
             <button onClick={(e) => onCloseTab(tab.id, e)} className="w-5 h-5 flex items-center justify-center rounded hover:bg-black/5 opacity-0 group-hover:opacity-100 text-[var(--text-tertiary)]"><XIcon /></button>
           </div>
         ))}
-        <button onClick={onAddTab} className="px-4 h-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border-r border-[var(--border-color)] flex items-center justify-center transition-colors">
+        <button onClick={onAddTab} className="px-4 h-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border-r border-[var(--border-color)] flex items-center justify-center transition-colors" title="New Tab (Ctrl+T)">
           <PlusIcon />
         </button>
       </div>
@@ -350,11 +382,18 @@ function TabBar({ tabs, activeTabId, onTabClick, onCloseTab, onAddTab }) {
         >
           BROWSER MENU
         </button>
-        {isMenuOpen && <BrowserMenu onClose={() => setIsMenuOpen(false)} />}
+        {isMenuOpen && <BrowserMenu onClose={() => setIsMenuOpen(false)} onAddTab={onAddTab} onShowHistory={onShowHistory} onOpenPricing={onOpenPricing} />}
+        <button
+          onClick={() => { setIsMenuOpen(false); onOpenPricing() }}
+          className="px-4 h-full text-[12px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors border-l border-[var(--border-color)]"
+          title="Pricing"
+        >
+          PRICING
+        </button>
         <div className="flex h-full pl-1 border-l border-[var(--border-color)]">
-          <button className="w-12 h-full text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] flex items-center justify-center transition-colors"><MinusIcon /></button>
-          <button className="w-12 h-full text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] flex items-center justify-center transition-colors"><SquareIcon /></button>
-          <button className="w-12 h-full text-[var(--text-tertiary)] hover:bg-red-500 hover:text-white flex items-center justify-center transition-colors"><XIcon /></button>
+          <button onClick={() => window.superBrowserDesktop?.minimize?.()} className="w-12 h-full text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] flex items-center justify-center transition-colors" title="Minimize"><MinusIcon /></button>
+          <button onClick={() => window.superBrowserDesktop?.maximize?.()} className="w-12 h-full text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] flex items-center justify-center transition-colors" title="Maximize"><SquareIcon /></button>
+          <button onClick={() => window.superBrowserDesktop?.close?.() || window.close()} className="w-12 h-full text-[var(--text-tertiary)] hover:bg-red-500 hover:text-white flex items-center justify-center transition-colors" title="Close"><XIcon /></button>
         </div>
       </div>
     </div>
@@ -375,20 +414,25 @@ function LoadingSkeleton() {
   )
 }
 
-function ResultsPanel({ mode, results, loading, onOpenLink }) {
+function ResultsPanel({ mode, results, loading, onOpenLink, query }) {
   if (loading) return <LoadingSkeleton />
   if (!results) return null
-  if (mode === 'seo') return <SEOResults results={results} onOpenLink={onOpenLink} />
+  if (mode === 'seo') return <SEOResults results={results} onOpenLink={onOpenLink} query={query} />
   if (mode === 'ai') return <AIResults results={results} />
   if (mode === 'community') return <Suspense fallback={<LoadingSkeleton />}><LazyCommunityResults results={results} onOpenLink={onOpenLink} /></Suspense>
   return null
 }
 
-function SEOResults({ results, onOpenLink }) {
+function SEOResults({ results, onOpenLink, query = "" }) {
   const items = results?.results || results || []
-  if (!items.length) return <p className="text-[var(--text-secondary)] text-center py-10">No results found.</p>
+  const shoppingData = results?.shopping_results || []
+  const hasShoppingData = shoppingData.length > 0
+
+  if (!items.length && !hasShoppingData) return <p className="text-[var(--text-secondary)] text-center py-10">No results found.</p>
+
   return (
     <div className="space-y-6 max-w-3xl">
+      {hasShoppingData && <ProductCarousel products={shoppingData} />}
       {items.map((r, i) => (
         <div key={i} className={`pb-6 mb-6 border-b border-[var(--border-color)] last:border-0 animate-fade-in-up stagger-${Math.min(i + 1, 3)}`}>
           <div className="flex-1 min-w-0">
@@ -405,11 +449,20 @@ function SEOResults({ results, onOpenLink }) {
 
 function AIResults({ results }) {
   const answer = results?.answer || ''
+  const isLiveData = results?.live_data === true
+  const sourceCount = results?.sources_scraped || 0
   return (
     <div className="max-w-3xl space-y-6 animate-fade-in-up">
       {answer ? (
-        <div className="p-8 bg-white border border-[var(--border-color)] rounded-3xl" style={{ borderTop: '4px solid var(--action-primary)' }}>
-          <h3 className="text-xl font-medium mb-6 flex items-center gap-3"><BrainIcon /> AI Answer</h3>
+        <div className="p-8 bg-white border border-[var(--border-color)] rounded-3xl" style={{ borderTop: `4px solid ${isLiveData ? '#10b981' : 'var(--action-primary)'}` }}>
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-xl font-medium flex items-center gap-3"><BrainIcon /> AI Answer</h3>
+            {isLiveData && (
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-medium bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full border border-emerald-200">
+                <span>🌐</span> Powered by live web data {sourceCount > 0 && `(${sourceCount} sources)`}
+              </span>
+            )}
+          </div>
           <div className="leading-loose whitespace-pre-wrap text-[16px] text-[var(--text-primary)]">{answer}</div>
         </div>
       ) : <p className="text-[var(--text-secondary)] py-10">No AI results available.</p>}
@@ -427,25 +480,126 @@ function ContextIndicator({ tabId, contextManager, onToggleInfo }) {
   )
 }
 
-function ContextWindow({ show, onClose }) {
+function PersonaDropdown({ value, onChange, personas }) {
+  const [isOpen, setIsOpen] = useState(false)
+  const dropdownRef = useRef()
+  const selected = personas.find(p => p.id === value) || personas[0]
+
+  useEffect(() => {
+    const handler = (e) => { if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setIsOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  return (
+    <div ref={dropdownRef} className="relative">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="pill-btn px-4 py-1.5 flex items-center gap-2 min-w-[120px] justify-between"
+      >
+        <span>{selected.label}</span>
+        <ChevronDownIcon />
+      </button>
+      {isOpen && (
+        <div className="absolute top-full left-0 mt-2 w-56 bg-white border border-[var(--border-color)] rounded-xl shadow-lg py-2 z-50 animate-fade-in-up">
+          {personas.map(p => (
+            <button
+              key={p.id}
+              onClick={() => { onChange(p.id); setIsOpen(false) }}
+              className={`w-full text-left px-4 py-2.5 hover:bg-[var(--bg-hover)] transition-colors flex flex-col ${value === p.id ? 'bg-[rgba(50,121,249,0.05)]' : ''}`}
+            >
+              <span className={`text-sm font-medium ${value === p.id ? 'text-[var(--action-primary)]' : 'text-[var(--text-primary)]'}`}>{p.label}</span>
+              <span className="text-xs text-[var(--text-tertiary)]">{p.desc}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ContextWindow({ show, onClose, tabId, sessionId, contextManager }) {
   const [chatMessages, setChatMessages] = useState([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [models, setModels] = useState([])
+  const [selectedModel, setSelectedModel] = useState('llama-3.1-8b-instant')
+  const [showModelSelector, setShowModelSelector] = useState(false)
+  const modelSelectorRef = useRef(null)
+
+  // Fetch available models on mount
+  useEffect(() => {
+    if (show) {
+      fetch(`${API_BASE}/api/context/models`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.models) {
+            setModels(data.models)
+            setSelectedModel(data.default || 'llama-3.1-8b-instant')
+          }
+        })
+        .catch(() => {})
+    }
+  }, [show])
+
+  // Close model selector on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (modelSelectorRef.current && !modelSelectorRef.current.contains(e.target)) {
+        setShowModelSelector(false)
+      }
+    }
+    if (showModelSelector) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [showModelSelector])
 
   if (!show) return null
 
-  const handleSend = (text) => {
-    // Optimistically add user message
+  const currentModel = models.find(m => m.id === selectedModel) || { name: 'Llama 3.1 8B', id: selectedModel }
+
+  const handleSend = async (text, modelId) => {
+    // Add user message immediately
     const userMsg = { id: Date.now().toString(), text, sender: 'user' }
     setChatMessages(prev => [...prev, userMsg])
+    setIsLoading(true)
 
-    // Mock AI response logic as provided in demo
-    setTimeout(() => {
+    try {
+      const response = await fetch(`${API_BASE}/api/context/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          message: text,
+          tab_id: tabId,
+          model: selectedModel
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error(`Chat failed: ${response.status}`)
+      }
+
+      const data = await response.json()
+      
       const aiReply = {
         id: (Date.now() + 1).toString(),
-        text: `I am your Super AI assistant! I see you are looking at context for this session. How can I help you analyze it?`,
-        sender: 'ai'
+        text: data.response || 'Sorry, I could not generate a response.',
+        sender: 'ai',
+        model: data.model_used
       }
       setChatMessages(prev => [...prev, aiReply])
-    }, 1000)
+    } catch (error) {
+      console.error('Chat error:', error)
+      const errorReply = {
+        id: (Date.now() + 1).toString(),
+        text: `Sorry, I encountered an error: ${error.message}. Please try again.`,
+        sender: 'ai'
+      }
+      setChatMessages(prev => [...prev, errorReply])
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -456,7 +610,51 @@ function ContextWindow({ show, onClose }) {
             <h3 className="text-lg font-medium tracking-tight">Super AI Context Session</h3>
             <span className="text-[11px] bg-black text-white px-2 py-0.5 rounded-full">BETA</span>
           </div>
-          <button onClick={onClose} className="btn-secondary px-4 py-1.5 text-sm hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors">Close Session</button>
+          <div className="flex items-center gap-3">
+            {/* Model Selector */}
+            <div className="relative" ref={modelSelectorRef}>
+              <button 
+                onClick={() => setShowModelSelector(!showModelSelector)}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-lg hover:bg-[var(--bg-hover)] transition-colors"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a2 2 0 0 1 0 4h-1.17a7 7 0 0 1-6.83 5 7 7 0 0 1-6.83-5H6a2 2 0 0 1 0-4h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"/>
+                  <circle cx="12" cy="17" r="1"/>
+                </svg>
+                <span className="font-medium">{currentModel.name}</span>
+                <ChevronDownIcon />
+              </button>
+              
+              {showModelSelector && (
+                <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-[var(--border-color)] rounded-xl shadow-xl z-50 overflow-hidden animate-fade-in-up">
+                  <div className="p-3 border-b border-[var(--border-color)] bg-[var(--bg-elevated)]">
+                    <span className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide">Select AI Model</span>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto">
+                    {models.map(model => (
+                      <button
+                        key={model.id}
+                        onClick={() => { setSelectedModel(model.id); setShowModelSelector(false) }}
+                        className={`w-full text-left px-4 py-3 hover:bg-[var(--bg-hover)] transition-colors border-b border-[var(--border-color)] last:border-b-0 ${selectedModel === model.id ? 'bg-[var(--bg-hover)]' : ''}`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-sm text-[var(--text-primary)]">{model.name}</span>
+                          {selectedModel === model.id && (
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--action-primary)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 6 9 17 4 12"/>
+                            </svg>
+                          )}
+                        </div>
+                        <p className="text-xs text-[var(--text-tertiary)] mt-0.5">{model.description}</p>
+                        <span className="text-[10px] text-[var(--text-tertiary)] bg-[var(--bg-elevated)] px-1.5 py-0.5 rounded mt-1 inline-block">{model.provider}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <button onClick={onClose} className="btn-secondary px-4 py-1.5 text-sm hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors">Close Session</button>
+          </div>
         </div>
         
         {/* Injecting the AiInput UI here directly */}
@@ -465,6 +663,7 @@ function ContextWindow({ show, onClose }) {
           onSendMessage={handleSend}
           backgroundText="AI Input 001"
           placeholder="How can I help you analyze this context?"
+          isLoading={isLoading}
         />
       </div>
     </div>
@@ -473,7 +672,7 @@ function ContextWindow({ show, onClose }) {
 
 function BackendStatusBanner() { return null } // Hidden for minimalist aesthetic
 
-function BrowserPanel({ url, onClose }) {
+function BrowserPanel({ url, title, onClose }) {
   const reloadWebview = () => document.getElementById(`webview-${url}`)?.reload()
 
   return (
@@ -491,14 +690,122 @@ function BrowserPanel({ url, onClose }) {
   )
 }
 
-/* eslint-disable react-hooks/static-components */
-function BrowserMenu({ onClose }) {
+function PricingPage({ onClose }) {
+  const plans = [
+    {
+      name: 'Free',
+      pricing: '0.0/-',
+      tokens: '2000',
+      contextWindow: '3',
+      models: 'GPT 4o mini'
+    },
+    {
+      name: 'Pro',
+      pricing: '500.0/-',
+      tokens: '10,000',
+      contextWindow: '5',
+      models: 'Perplexity,Gemini'
+    },
+    {
+      name: 'Max',
+      pricing: '1000.0/-',
+      tokens: '20,000',
+      contextWindow: '10',
+      models: 'Perplexity, Gemini, Claude, ChatGPT, Grok'
+    }
+  ]
+
+  const rows = [
+    { key: 'pricing', label: 'Pricing' },
+    { key: 'tokens', label: 'Tokens' },
+    { key: 'contextWindow', label: 'Contexting Window(size)' },
+    { key: 'models', label: 'Models' }
+  ]
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pricing-dialog-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in-up"
+      onClick={onClose}
+    >
+      <div className="w-full max-w-6xl max-h-[90vh] overflow-auto rounded-3xl border border-[var(--border-color)] bg-[var(--bg-elevated)] p-4 md:p-8 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="card-minimal bg-white p-5 md:p-8 mb-5 md:mb-7">
+          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-semibold tracking-[0.16em] uppercase text-[var(--text-tertiary)] mb-2">Plans</p>
+              <h2 id="pricing-dialog-title" className="text-3xl md:text-4xl leading-tight tracking-tight m-0">Super Browser Pricing</h2>
+              <p className="text-[var(--text-secondary)] mt-2 mb-0">Pick a plan that matches how deeply you research and compare answers.</p>
+            </div>
+            <button onClick={onClose} className="btn-secondary px-4 py-2 text-sm font-medium">Close</button>
+          </div>
+        </div>
+
+        <div className="pricing-layout">
+          <div className="pricing-row-labels" aria-hidden="true">
+            <div className="pricing-row-label pricing-row-label-header" />
+            {rows.map((row) => (
+              <div key={row.key} className={`pricing-row-label ${row.key === 'contextWindow' ? 'pricing-row-label-context' : ''}`}>
+                {row.label}
+              </div>
+            ))}
+          </div>
+
+          <div className="pricing-shell card-minimal bg-white overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="pricing-table w-full min-w-[760px] border-collapse">
+                <caption className="pricing-sr-only">Super Browser pricing plan</caption>
+                <thead>
+                  <tr>
+                    {plans.map((plan) => (
+                      <th key={plan.name}>{plan.name}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.key}>
+                      {plans.map((plan) => (
+                        <td key={`${plan.name}-${row.key}`}>
+                          <span className="pricing-sr-only">{row.label}: </span>
+                          {plan[row.key]}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function BrowserMenu({ onClose, onAddTab, onShowHistory, onOpenPricing }) {
   const menuRef = useRef()
+  const [zoomLevel, setZoomLevel] = useState(100)
+  
   useEffect(() => {
     const handler = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) onClose() }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [onClose])
+
+  const handleAction = (action) => {
+    action?.()
+    onClose()
+  }
 
   const icons = {
     user: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>,
@@ -517,6 +824,7 @@ function BrowserMenu({ onClose }) {
     find: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>,
     cast: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 16v3a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v3"/><path d="M2 12a10 10 0 0 1 10 10"/><path d="M2 8a14 14 0 0 1 14 14"/></svg>,
     briefcase: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>,
+    pricing: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1v22"/><path d="M17 5H9a3 3 0 0 0 0 6h6a3 3 0 0 1 0 6H7"/></svg>,
     help: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
     settings: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
     exit: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
@@ -527,8 +835,12 @@ function BrowserMenu({ onClose }) {
 
   const divider = <div className="h-[1px] w-full bg-[var(--border-color)] my-1" />
 
-  const MenuItem = ({ icon, label, shortcut, rightIcon }) => (
-    <button className="w-full flex items-center px-4 py-1.5 text-[13px] hover:bg-[var(--bg-hover)] group transition-colors">
+  const MenuItem = ({ icon, label, shortcut, rightIcon, onClick, disabled }) => (
+    <button 
+      onClick={() => !disabled && handleAction(onClick)} 
+      disabled={disabled}
+      className={`w-full flex items-center px-4 py-1.5 text-[13px] hover:bg-[var(--bg-hover)] group transition-colors ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+    >
       <span className="text-[var(--text-tertiary)] mr-3">{icon || icons.empty}</span>
       <span className="text-[var(--text-primary)] flex-1 text-left">{label}</span>
       {shortcut && <span className="text-[#9aa0a6] text-[11px] font-medium ml-4">{shortcut}</span>}
@@ -552,13 +864,13 @@ function BrowserMenu({ onClose }) {
       <span className="text-[var(--text-tertiary)] mr-3">{icons.zoom}</span>
       <span className="text-[var(--text-primary)] flex-1 text-left">Zoom</span>
       <div className="flex items-center ml-4 border border-[var(--border-color)] rounded-md overflow-hidden bg-white">
-        <button className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">−</button>
+        <button onClick={() => setZoomLevel(z => Math.max(25, z - 10))} className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">−</button>
         <div className="w-[1px] h-4 bg-[var(--border-color)]"></div>
-        <span className="px-2 text-[12px] font-medium text-[var(--text-primary)]">100%</span>
+        <span className="px-2 text-[12px] font-medium text-[var(--text-primary)] min-w-[40px] text-center">{zoomLevel}%</span>
         <div className="w-[1px] h-4 bg-[var(--border-color)]"></div>
-        <button className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">+</button>
+        <button onClick={() => setZoomLevel(z => Math.min(200, z + 10))} className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">+</button>
       </div>
-      <button className="ml-3 p-1 rounded-md border border-[var(--border-color)] bg-white hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]">
+      <button onClick={() => document.documentElement.requestFullscreen?.()} className="ml-3 p-1 rounded-md border border-[var(--border-color)] bg-white hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]">
         {icons.fullscreen}
       </button>
     </div>
@@ -566,38 +878,38 @@ function BrowserMenu({ onClose }) {
 
   return (
     <div ref={menuRef} className="absolute top-[44px] right-0 w-[300px] bg-white border border-[var(--border-color)] shadow-2xl rounded-bl-xl py-1 z-50 animate-fade-in-up origin-top-right">
-      <MenuItem icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>} label="New tab" shortcut="Ctrl+T" />
-      <MenuItem icon={icons.window} label="New window" shortcut="Ctrl+N" />
-      <MenuItem icon={icons.incognito} label="New Incognito window" shortcut="Ctrl+Shift+N" />
+      <MenuItem icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>} label="New tab" shortcut="Ctrl+T" onClick={onAddTab} />
+      <MenuItem icon={icons.window} label="New window" shortcut="Ctrl+N" onClick={() => window.open(window.location.href, '_blank')} />
+      <MenuItem icon={icons.incognito} label="New Incognito window" shortcut="Ctrl+Shift+N" disabled />
       
       {divider}
       <ProfileMenu />
       {divider}
 
-      <MenuItem icon={icons.key} label="Passwords and autofill" rightIcon="▶" />
-      <MenuItem icon={icons.history} label="History" rightIcon="▶" />
-      <MenuItem icon={icons.download} label="Downloads" shortcut="Ctrl+J" />
-      <MenuItem icon={icons.star} label="Bookmarks and lists" rightIcon="▶" />
-      <MenuItem icon={icons.grid} label="Tab groups" rightIcon="▶" />
-      <MenuItem icon={icons.puzzle} label="Extensions" rightIcon="▶" />
-      <MenuItem icon={icons.trash} label="Delete browsing data..." shortcut="Ctrl+Shift+Del" />
+      <MenuItem icon={icons.key} label="Passwords and autofill" rightIcon="▶" disabled />
+      <MenuItem icon={icons.history} label="History" onClick={onShowHistory} />
+      <MenuItem icon={icons.download} label="Downloads" shortcut="Ctrl+J" disabled />
+      <MenuItem icon={icons.star} label="Bookmarks and lists" rightIcon="▶" disabled />
+      <MenuItem icon={icons.grid} label="Tab groups" rightIcon="▶" disabled />
+      <MenuItem icon={icons.puzzle} label="Extensions" rightIcon="▶" disabled />
+      <MenuItem icon={icons.trash} label="Delete browsing data..." shortcut="Ctrl+Shift+Del" disabled />
 
       {divider}
       <ZoomControl />
       {divider}
 
-      <MenuItem icon={icons.print} label="Print..." shortcut="Ctrl+P" />
-      <MenuItem icon={icons.lens} label="Search with Google Lens" />
-      <MenuItem icon={icons.translate} label="Translate..." />
-      <MenuItem icon={icons.find} label="Find and edit" rightIcon="▶" />
-      <MenuItem icon={icons.cast} label="Cast, save, and share" rightIcon="▶" />
-      <MenuItem icon={icons.briefcase} label="More tools" rightIcon="▶" />
+      <MenuItem icon={icons.print} label="Print..." shortcut="Ctrl+P" onClick={() => window.print()} />
+      <MenuItem icon={icons.lens} label="Search with Google Lens" disabled />
+      <MenuItem icon={icons.translate} label="Translate..." disabled />
+      <MenuItem icon={icons.find} label="Find in page" shortcut="Ctrl+F" disabled />
+      <MenuItem icon={icons.cast} label="Cast, save, and share" rightIcon="▶" disabled />
+      <MenuItem icon={icons.briefcase} label="More tools" rightIcon="▶" disabled />
 
       {divider}
-      <MenuItem icon={icons.help} label="Help" rightIcon="▶" />
-      <MenuItem icon={icons.settings} label="Settings" />
-      <MenuItem icon={icons.exit} label="Exit" />
+      <MenuItem icon={icons.help} label="Help" onClick={() => window.open('https://github.com', '_blank')} />
+      <MenuItem icon={icons.pricing} label="Pricing" onClick={onOpenPricing} />
+      <MenuItem icon={icons.settings} label="Settings" disabled />
+      <MenuItem icon={icons.exit} label="Exit" onClick={() => window.superBrowserDesktop?.close?.() || window.close()} />
     </div>
   )
 }
-/* eslint-enable react-hooks/static-components */

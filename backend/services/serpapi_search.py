@@ -14,29 +14,48 @@ def _get_serpapi_key() -> str | None:
     return os.getenv("SERPAPI_API_KEY") or os.getenv("SERP_API_KEY")
 
 
-def _build_params(engine: str, query: str, api_key: str) -> dict[str, str]:
+def _build_params(engine: str, query: str, api_key: str, gl: str | None = None) -> dict[str, str]:
+    """
+    Build search parameters for SerpAPI.
+    
+    When gl is None, no region parameter is added - uses natural CDN/default behavior.
+    When gl is specified (e.g., "us", "in"), adds region filtering for localized results.
+    """
     if engine == "google":
-        return {
+        params = {
             "engine": "google",
             "q": query,
             "num": str(MAX_RESULTS_PER_ENGINE),
             "hl": "en",
             "api_key": api_key,
         }
+        # Only add region if explicitly specified (for AI mode)
+        if gl:
+            params["gl"] = gl
+        return params
 
     if engine == "bing":
-        return {
+        params = {
             "engine": "bing",
             "q": query,
             "count": str(MAX_RESULTS_PER_ENGINE),
             "api_key": api_key,
         }
+        # Only add country code if explicitly specified
+        if gl:
+            params["cc"] = gl.upper()
+        return params
 
-    return {
+    # DuckDuckGo
+    params = {
         "engine": "duckduckgo",
         "q": query,
         "api_key": api_key,
     }
+    # Only add locale if explicitly specified
+    if gl:
+        params["kl"] = f"{gl}-en"
+    return params
 
 
 def _normalize_snippet(value: Any) -> str:
@@ -68,26 +87,34 @@ def _normalize_result(item: dict[str, Any], source: str) -> dict[str, str] | Non
     }
 
 
-async def search_serpapi_engine(query: str, engine: str) -> list[dict]:
-    """Fetch and normalize SerpAPI organic results for one engine."""
+async def search_serpapi_engine(query: str, engine: str, gl: str | None = None) -> dict[str, list]:
+    """
+    Fetch and normalize SerpAPI organic results and shopping results for one engine.
+    
+    When gl is None, uses natural CDN/default behavior (no region filtering).
+    When gl is specified, fetches region-specific results.
+    """
     api_key = _get_serpapi_key()
     if not api_key:
-        return []
+        return {"organic": [], "shopping": []}
 
     try:
         async with httpx.AsyncClient(timeout=SERPAPI_TIMEOUT) as client:
             response = await client.get(
                 SERPAPI_SEARCH_URL,
-                params=_build_params(engine, query, api_key),
+                params=_build_params(engine, query, api_key, gl=gl),
             )
             response.raise_for_status()
     except (httpx.RequestError, httpx.HTTPStatusError):
-        return []
+        return {"organic": [], "shopping": []}
 
     data = response.json()
     organic_results = data.get("organic_results", [])
+    shopping_results = data.get("shopping_results", [])
     if not isinstance(organic_results, list):
-        return []
+        organic_results = []
+    if not isinstance(shopping_results, list):
+        shopping_results = []
 
     normalized: list[dict] = []
     for item in organic_results:
@@ -102,16 +129,16 @@ async def search_serpapi_engine(query: str, engine: str) -> list[dict]:
         if len(normalized) >= MAX_RESULTS_PER_ENGINE:
             break
 
-    return normalized
+    return {"organic": normalized, "shopping": shopping_results}
 
 
-async def search_google_serpapi(query: str) -> list[dict]:
-    return await search_serpapi_engine(query, "google")
+async def search_google_serpapi(query: str, gl: str | None = None) -> dict[str, list]:
+    return await search_serpapi_engine(query, "google", gl=gl)
 
 
-async def search_bing_serpapi(query: str) -> list[dict]:
-    return await search_serpapi_engine(query, "bing")
+async def search_bing_serpapi(query: str, gl: str | None = None) -> dict[str, list]:
+    return await search_serpapi_engine(query, "bing", gl=gl)
 
 
-async def search_duckduckgo_serpapi(query: str) -> list[dict]:
-    return await search_serpapi_engine(query, "duckduckgo")
+async def search_duckduckgo_serpapi(query: str, gl: str | None = None) -> dict[str, list]:
+    return await search_serpapi_engine(query, "duckduckgo", gl=gl)

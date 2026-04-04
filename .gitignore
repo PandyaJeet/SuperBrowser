@@ -4,11 +4,6 @@ __pycache__/
 *$py.class
 *.so
 .Python
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-coverage/
 env/
 venv/
 ENV/

@@ -7,7 +7,15 @@ const SendIcon = () => (
   </svg>
 );
 
-export function AiInput({ messages, onSendMessage, backgroundText = "AI Input", placeholder = "Ask me anything..." }) {
+const LoadingDots = () => (
+  <div className="flex gap-1 items-center">
+    <div className="w-2 h-2 bg-[var(--text-tertiary)] rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+    <div className="w-2 h-2 bg-[var(--text-tertiary)] rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+    <div className="w-2 h-2 bg-[var(--text-tertiary)] rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+  </div>
+);
+
+export function AiInput({ messages, onSendMessage, backgroundText = "AI Input", placeholder = "Ask me anything...", isLoading = false }) {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef(null);
 
@@ -66,6 +74,13 @@ export function AiInput({ messages, onSendMessage, backgroundText = "AI Input", 
             );
           })
         )}
+        {isLoading && (
+          <div className="flex w-full justify-start animate-fade-in-up">
+            <div className="max-w-[85%] px-5 py-3.5 bg-white border border-[var(--border-color)] rounded-2xl rounded-bl-sm shadow-sm">
+              <LoadingDots />
+            </div>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 
@@ -77,13 +92,14 @@ export function AiInput({ messages, onSendMessage, backgroundText = "AI Input", 
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={placeholder}
-            className="flex-1 bg-transparent outline-none text-[15px] text-[var(--text-primary)] placeholder-[var(--text-tertiary)]"
+            placeholder={isLoading ? "Thinking..." : placeholder}
+            disabled={isLoading}
+            className="flex-1 bg-transparent outline-none text-[15px] text-[var(--text-primary)] placeholder-[var(--text-tertiary)] disabled:opacity-50"
             autoFocus
           />
           <button
             onClick={handleSend}
-            disabled={!inputText.trim()}
+            disabled={!inputText.trim() || isLoading}
             className="w-8 h-8 rounded-full bg-black text-white flex items-center justify-center disabled:opacity-30 disabled:bg-[var(--border-color)] transition-all shrink-0 hover:scale-105"
           >
             <SendIcon />

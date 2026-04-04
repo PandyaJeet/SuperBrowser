@@ -12,12 +12,13 @@ class ContextualAIRequest(BaseModel):
     query: str
     persona: str = "default"
     context: Optional[Dict] = None
+    region: str = "us"
 
 
 @router.get("/ai")
-async def get_ai(q: str, session_id: str = "", persona: str = "default"):
+async def get_ai(q: str, session_id: str = "", persona: str = "default", gl: str = "us"):
     """Legacy endpoint for backward compatibility"""
-    return await get_ai_consensus(query=q, persona=persona)
+    return await get_ai_consensus(query=q, persona=persona, gl=gl)
 
 
 @router.post("/ai/contextual")
@@ -29,5 +30,6 @@ async def get_ai_with_context(request: ContextualAIRequest):
     return await get_ai_consensus(
         query=request.query,
         persona=request.persona,
-        context=request.context
+        context=request.context,
+        gl=request.region
     )

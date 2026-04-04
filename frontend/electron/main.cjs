@@ -189,6 +189,7 @@ function isPortFree(port) {
 async function findAvailablePort(startPort = DEFAULT_BACKEND_PORT, maxTries = 50) {
   for (let i = 0; i < maxTries; i += 1) {
     const candidate = startPort + i;
+    // eslint-disable-next-line no-await-in-loop
     if (await isPortFree(candidate)) return candidate;
   }
   throw new Error("No available backend port found.");
@@ -198,11 +199,13 @@ async function waitForBackendReady(url, timeoutMs = 20000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     try {
+      // eslint-disable-next-line no-await-in-loop
       const res = await fetch(`${url}/health`);
       if (res.ok) return true;
     } catch {
       // retry
     }
+    // eslint-disable-next-line no-await-in-loop
     await new Promise((r) => setTimeout(r, 400));
   }
   return false;
