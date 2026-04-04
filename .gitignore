@@ -40,3 +40,5 @@ yarn-error.log*
 # Build
 build/
 *.egg-info/
+frontend/release/
+frontend/win-unpacked/

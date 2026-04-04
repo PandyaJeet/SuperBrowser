@@ -1,8 +1,10 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend
 } from 'recharts'
+import { useContextManager } from './useContextManager'
+import { getApiBase } from './config/apiBase'
 
 const PERSONAS = [
   { id: "default",    label: "Default",     desc: "Raw Groq"            },
@@ -12,18 +14,7 @@ const PERSONAS = [
   { id: "claude",     label: "Claude",       desc: "Nuanced & careful"   },
 ]
 
-const API_BASE = import.meta.env.VITE_API_BASE || (() => {
-  const hostname = window.location.hostname;
-  if (hostname === "localhost") {
-    return "http://localhost:8000";
-  }
-  // Handle GitHub Codespaces URLs: xxx-5174.app.github.dev -> xxx-8000.app.github.dev
-  if (hostname.includes('.app.github.dev')) {
-    return window.location.origin.replace(/-\d+\.app\.github\.dev/, '-8000.app.github.dev');
-  }
-  // Fallback for other environments
-  return window.location.href.replace(/:\d+.*/, ":8000").replace(/\/$/, "");
-})();
+const API_BASE = getApiBase()
 
 // Helper to create a new tab object
 function createNewTab() {
@@ -36,7 +27,9 @@ function createNewTab() {
     loading: false,
     error: null,
     sessionId: crypto.randomUUID(),
-    history: []
+    history: [],
+    browserUrl: "",
+    browserTitle: ""
   }
 }
 
@@ -45,8 +38,19 @@ function App() {
   const [activeTabId, setActiveTabId] = useState(tabs[0].id)
   const [showHistory, setShowHistory] = useState(false)
   const [persona, setPersona] = useState("default")
+  const [showContextInfo, setShowContextInfo] = useState(false)
+  const [backendStatus, setBackendStatus] = useState(null)
+
+  // Initialize context manager
+  const contextManager = useContextManager()
 
   const activeTab = tabs.find(t => t.id === activeTabId)
+  const isBrowserTab = Boolean(activeTab?.browserUrl)
+
+  useEffect(() => {
+    if (!window.superBrowserDesktop?.isElectron || !window.superBrowserDesktop?.backend?.getStatus) return
+    window.superBrowserDesktop.backend.getStatus().then(setBackendStatus).catch(() => {})
+  }, [])
 
   const updateTab = useCallback((tabId, updates) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t))
@@ -59,6 +63,36 @@ function App() {
       community: `/api/search/community`
     }
 
+    // For AI mode, use contextual endpoint if we have context
+    if (tabData.activeMode === 'ai') {
+      const context = contextManager.getAIContext(tabId)
+      const hasContext = context.queries.length > 0 || context.results.length > 0
+      
+      if (hasContext) {
+        // Use POST endpoint with context
+        fetch(`${API_BASE}/api/search/ai/contextual`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: tabData.query,
+            persona: searchPersona,
+            context: context
+          })
+        })
+          .then(res => res.json())
+          .then(data => {
+            setTabs(prev => prev.map(t => t.id === tabId ? { ...t, results: data, loading: false } : t))
+            // Track results in context
+            contextManager.addResults(tabId, tabData.sessionId, data.results || [])
+          })
+          .catch(() => {
+            setTabs(prev => prev.map(t => t.id === tabId ? { ...t, error: "Search failed. Please try again.", loading: false } : t))
+          })
+        return
+      }
+    }
+
+    // Regular search (non-AI or AI without context)
     let url = `${API_BASE}${endpoints[tabData.activeMode]}?q=${encodeURIComponent(tabData.query)}&session_id=${tabData.sessionId}`
     if (tabData.activeMode === 'ai') {
       url += `&persona=${searchPersona}`
@@ -68,16 +102,24 @@ function App() {
       .then(res => res.json())
       .then(data => {
         setTabs(prev => prev.map(t => t.id === tabId ? { ...t, results: data, loading: false } : t))
+        
+        // Track results in context for future use
+        if (data.results && Array.isArray(data.results)) {
+          contextManager.addResults(tabId, tabData.sessionId, data.results)
+        }
       })
       .catch(() => {
         setTabs(prev => prev.map(t => t.id === tabId ? { ...t, error: "Search failed. Please try again.", loading: false } : t))
       })
-  }, [])
+  }, [contextManager])
 
   const handleSearch = useCallback((tabId, searchPersona = "default") => {
     setTabs(currentTabs => {
       const tab = currentTabs.find(t => t.id === tabId)
       if (!tab?.query.trim()) return currentTabs
+      
+      // Track query in context
+      contextManager.addQuery(tabId, tab.sessionId, tab.query, tab.activeMode)
       
       // Trigger the async fetch with current tab data
       performSearch(tabId, tab, searchPersona)
@@ -94,7 +136,7 @@ function App() {
         }
       })
     })
-  }, [performSearch])
+  }, [performSearch, contextManager])
 
   // Handle mode change - update mode and trigger search if there's an active query with results
   const handleModeChange = useCallback((mode) => {
@@ -159,11 +201,25 @@ function App() {
   }
 
   function handleSuggestedSearch(query) {
-    updateTab(activeTabId, { query })
+    updateTab(activeTabId, { query, browserUrl: "", browserTitle: "" })
+  }
+
+  function openInAppUrl(url, title = "Web Page") {
+    if (!url) return
+    const browserTab = createNewTab()
+    browserTab.browserUrl = url
+    browserTab.browserTitle = title
+    browserTab.title = (title || "Web").slice(0, 25)
+    browserTab.query = url
+    setTabs(prev => [...prev, browserTab])
+    setActiveTabId(browserTab.id)
+    if (activeTab) {
+      contextManager.addVisitedPage(activeTabId, activeTab.sessionId, url, title, `Visited: ${url}`)
+    }
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex flex-col">
+    <div className="h-screen bg-gray-950 text-white flex flex-col overflow-hidden">
       {/* Tab Bar */}
       <TabBar
         tabs={tabs}
@@ -174,67 +230,91 @@ function App() {
       />
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
-        {/* Address Bar */}
-        <AddressBar
-          query={activeTab?.query || ""}
-          loading={activeTab?.loading || false}
-          onQueryChange={(q) => updateTab(activeTabId, { query: q })}
-          onSearch={() => handleSearch(activeTabId, persona)}
-        />
+      <div className="flex-1 flex flex-col min-h-0">
+        {!isBrowserTab && (
+          <>
+            {/* Address Bar */}
+            <AddressBar
+              query={activeTab?.query || ""}
+              loading={activeTab?.loading || false}
+              onQueryChange={(q) => updateTab(activeTabId, { query: q })}
+              onSearch={() => handleSearch(activeTabId, persona)}
+            />
 
-        {/* Mode Selector */}
-        <ModeSelector
-          activeMode={activeTab?.activeMode || "seo"}
-          onModeChange={handleModeChange}
-        />
+            {/* Mode Selector */}
+            <ModeSelector
+              activeMode={activeTab?.activeMode || "seo"}
+              onModeChange={handleModeChange}
+            />
 
-        {/* Persona Selector (AI mode only) */}
-        {activeTab?.activeMode === 'ai' && (
-          <div className="flex justify-center pb-4 bg-gray-950">
-            <select
-              value={persona}
-              onChange={e => setPersona(e.target.value)}
-              className="text-sm border border-gray-300 dark:border-gray-600 
-                         rounded-lg px-3 py-1.5 bg-white dark:bg-gray-800 
-                         text-gray-700 dark:text-gray-200 cursor-pointer"
-            >
-              {PERSONAS.map(p => (
-                <option key={p.id} value={p.id}>
-                  {p.label} — {p.desc}
-                </option>
-              ))}
-            </select>
-          </div>
+            {window.superBrowserDesktop?.isElectron && (
+              <BackendStatusBanner status={backendStatus} />
+            )}
+
+            {/* Persona Selector (AI mode only) */}
+            {activeTab?.activeMode === 'ai' && (
+              <div className="flex justify-center items-center gap-4 pb-4 bg-gray-950">
+                <select
+                  value={persona}
+                  onChange={e => setPersona(e.target.value)}
+                  className="text-sm border border-gray-300 dark:border-gray-600 
+                             rounded-lg px-3 py-1.5 bg-white dark:bg-gray-800 
+                             text-gray-700 dark:text-gray-200 cursor-pointer"
+                >
+                  {PERSONAS.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.label} — {p.desc}
+                    </option>
+                  ))}
+                </select>
+                
+                {/* Context Indicator */}
+                <ContextIndicator 
+                  tabId={activeTabId}
+                  contextManager={contextManager}
+                  onToggleInfo={() => setShowContextInfo(!showContextInfo)}
+                />
+              </div>
+            )}
+          </>
         )}
 
         {/* Content Area with optional sidebar */}
-        <div className="flex-1 flex relative">
-          <div className="flex-1 overflow-auto p-4">
+        <div className="flex-1 flex relative min-h-0">
+          <div className={`flex-1 min-h-0 ${isBrowserTab ? 'overflow-hidden p-0' : 'overflow-auto p-4'}`}>
             {activeTab?.error && (
               <div className="bg-red-900/50 border border-red-700 rounded-lg p-4 mb-4 text-red-200">
                 {activeTab.error}
               </div>
             )}
 
-            {!activeTab?.results && !activeTab?.query ? (
+            {activeTab?.browserUrl ? (
+              <BrowserPanel
+                url={activeTab.browserUrl}
+                title={activeTab.browserTitle}
+                onClose={() => updateTab(activeTabId, { browserUrl: "", browserTitle: "" })}
+              />
+            ) : !activeTab?.results && !activeTab?.query ? (
               <NewTabPage onSuggestedSearch={handleSuggestedSearch} />
             ) : (
               <ResultsPanel
                 mode={activeTab?.activeMode}
                 results={activeTab?.results}
                 loading={activeTab?.loading}
+                onOpenLink={openInAppUrl}
               />
             )}
           </div>
 
           {/* History Sidebar */}
-          <HistorySidebar
-            show={showHistory}
-            onToggle={() => setShowHistory(!showHistory)}
-            history={activeTab?.history || []}
-            onHistoryClick={handleHistoryClick}
-          />
+          {!isBrowserTab && (
+            <HistorySidebar
+              show={showHistory}
+              onToggle={() => setShowHistory(!showHistory)}
+              history={activeTab?.history || []}
+              onHistoryClick={handleHistoryClick}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -416,7 +496,7 @@ function NewTabPage({ onSuggestedSearch }) {
 }
 
 // Results Panel Component
-function ResultsPanel({ mode, results, loading }) {
+function ResultsPanel({ mode, results, loading, onOpenLink }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[40vh]">
@@ -433,18 +513,18 @@ function ResultsPanel({ mode, results, loading }) {
   }
 
   if (mode === 'seo') {
-    return <SEOResults results={results} />
+    return <SEOResults results={results} onOpenLink={onOpenLink} />
   } else if (mode === 'ai') {
     return <AIResults results={results} />
   } else if (mode === 'community') {
-    return <CommunityResults results={results} />
+    return <CommunityResults results={results} onOpenLink={onOpenLink} />
   }
 
   return null
 }
 
 // SEO Results Component
-function SEOResults({ results }) {
+function SEOResults({ results, onOpenLink }) {
   const items = results?.results || results || []
 
   if (!Array.isArray(items) || items.length === 0) {
@@ -462,8 +542,10 @@ function SEOResults({ results }) {
             <div className="flex-1 min-w-0">
               <a
                 href={result.url}
-                target="_blank"
-                rel="noopener noreferrer"
+                onClick={(e) => {
+                  e.preventDefault()
+                  onOpenLink?.(result.url, result.title || "Search Result")
+                }}
                 className="text-indigo-400 hover:text-indigo-300 font-medium text-lg block truncate"
               >
                 {result.title}
@@ -519,7 +601,7 @@ function AIResults({ results }) {
 }
 
 // Community Results Component
-function CommunityResults({ results }) {
+function CommunityResults({ results, onOpenLink }) {
   const insights = results?.insights || ""
   const stack_results = results?.stack_results || []
   const reddit_results = results?.reddit_results || []
@@ -691,8 +773,10 @@ function CommunityResults({ results }) {
             >
               <a
                 href={item.link || item.url}
-                target="_blank"
-                rel="noopener noreferrer"
+                onClick={(e) => {
+                  e.preventDefault()
+                  onOpenLink?.(item.link || item.url, item.title || "Stack Overflow")
+                }}
                 className="text-indigo-400 hover:text-indigo-300 font-medium block mb-2"
               >
                 {item.title}
@@ -720,8 +804,10 @@ function CommunityResults({ results }) {
             >
               <a
                 href={item.hn_link || item.url}
-                target="_blank"
-                rel="noopener noreferrer"
+                onClick={(e) => {
+                  e.preventDefault()
+                  onOpenLink?.(item.hn_link || item.url, item.title || "Hacker News")
+                }}
                 className="text-orange-400 hover:text-orange-300 font-medium block mb-2"
               >
                 {item.title}
@@ -748,8 +834,10 @@ function CommunityResults({ results }) {
             >
               <a
                 href={item.url}
-                target="_blank"
-                rel="noopener noreferrer"
+                onClick={(e) => {
+                  e.preventDefault()
+                  onOpenLink?.(item.url, item.title || "Dev.to")
+                }}
                 className="text-purple-400 hover:text-purple-300 font-medium block mb-2"
               >
                 {item.title}
@@ -778,8 +866,10 @@ function CommunityResults({ results }) {
             >
               <a
                 href={item.url}
-                target="_blank"
-                rel="noopener noreferrer"
+                onClick={(e) => {
+                  e.preventDefault()
+                  onOpenLink?.(item.url, item.title || "Reddit")
+                }}
                 className="text-red-400 hover:text-red-300 font-medium block mb-2"
               >
                 {item.title}
@@ -846,6 +936,138 @@ function HistorySidebar({ show, onToggle, history, onHistoryClick }) {
         </div>
       )}
     </>
+  )
+}
+
+// Context Indicator Component
+function ContextIndicator({ tabId, contextManager, onToggleInfo }) {
+  const summary = contextManager.getContextSummary(tabId)
+  
+  if (!summary.hasContext) {
+    return (
+      <div className="text-xs text-gray-500 px-3 py-1.5 border border-gray-700 rounded-lg flex items-center gap-2">
+        <span>🧠</span>
+        <span>No context yet</span>
+      </div>
+    )
+  }
+  
+  return (
+    <button
+      onClick={onToggleInfo}
+      className="text-xs px-3 py-1.5 bg-indigo-500/20 text-indigo-400 border border-indigo-500/50 rounded-lg hover:bg-indigo-500/30 transition-colors flex items-center gap-2"
+      title="AI has context from your browsing"
+    >
+      <span>🧠</span>
+      <span>Context: {summary.queryCount} searches, {summary.resultCount} results</span>
+    </button>
+  )
+}
+
+function BackendStatusBanner({ status }) {
+  if (!status) return null
+  const isHealthy = status.running
+  return (
+    <div
+      className={`mx-auto mt-1 mb-2 px-3 py-1 rounded text-xs border ${
+        isHealthy
+          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+          : 'bg-red-500/10 text-red-300 border-red-500/30'
+      }`}
+    >
+      {isHealthy ? `Desktop backend connected (${status.url})` : `Backend issue: ${status.lastError || 'not running'}`}
+    </div>
+  )
+}
+
+function BrowserPanel({ url, title, onClose }) {
+  const webviewRef = useRef(null)
+  const [address, setAddress] = useState(url)
+  const [canGoBack, setCanGoBack] = useState(false)
+  const [canGoForward, setCanGoForward] = useState(false)
+
+  useEffect(() => {
+    setAddress(url)
+  }, [url])
+
+  useEffect(() => {
+    const wv = webviewRef.current
+    if (!wv) return
+    const onNavigate = () => {
+      setAddress(wv.getURL() || url)
+      setCanGoBack(wv.canGoBack())
+      setCanGoForward(wv.canGoForward())
+    }
+    wv.addEventListener('did-navigate', onNavigate)
+    wv.addEventListener('did-navigate-in-page', onNavigate)
+    wv.addEventListener('dom-ready', onNavigate)
+    return () => {
+      wv.removeEventListener('did-navigate', onNavigate)
+      wv.removeEventListener('did-navigate-in-page', onNavigate)
+      wv.removeEventListener('dom-ready', onNavigate)
+    }
+  }, [url])
+
+  const navigateToAddress = () => {
+    const wv = webviewRef.current
+    if (!wv || !address) return
+    const next = /^https?:\/\//i.test(address) ? address : `https://${address}`
+    wv.loadURL(next)
+  }
+
+  return (
+    <div className="h-full w-full flex flex-col overflow-hidden bg-white">
+      <div className="bg-gray-900 px-3 py-2 flex items-center gap-2 border-b border-gray-800">
+        <button
+          onClick={() => webviewRef.current?.goBack()}
+          disabled={!canGoBack}
+          className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-gray-200"
+        >
+          ←
+        </button>
+        <button
+          onClick={() => webviewRef.current?.goForward()}
+          disabled={!canGoForward}
+          className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-gray-200"
+        >
+          →
+        </button>
+        <button
+          onClick={() => webviewRef.current?.reload()}
+          className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
+        >
+          ↻
+        </button>
+        <input
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && navigateToAddress()}
+          className="flex-1 min-w-0 text-sm bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-gray-200"
+        />
+        <button
+          onClick={navigateToAddress}
+          className="text-xs px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white"
+        >
+          Go
+        </button>
+        <div className="min-w-0 max-w-[220px] hidden md:block">
+          <p className="text-xs text-gray-400 truncate">{title || 'Web Page'}</p>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
+        >
+          Back to Results
+        </button>
+      </div>
+      <webview
+        ref={webviewRef}
+        src={url}
+        className="w-full flex-1 bg-white"
+        style={{ minHeight: 0 }}
+        allowpopups="true"
+      />
+    </div>
   )
 }
 
