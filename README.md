@@ -318,7 +318,8 @@ This project is open source and available under the MIT License.
 
 **Jeet Pandya**
 - GitHub: [@PandyaJeet](https://github.com/PandyaJeet)
-
+**Prince Patel**
+- Github: [@Princepatel-027](https://github.com/Princepatel-027).
 ---
 
 <div align="center">
