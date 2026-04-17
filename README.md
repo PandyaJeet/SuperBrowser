@@ -7,7 +7,7 @@
 
 ## 🚀 Quick Links
 
-- **🌐 Live Website**: [https://superbrowser-d6441.web.app/](https://superbrowser-d6441.web.app/)
+- **🌐 Live Website**: [https://superbrowser.web.app/](https://superbrowser.web.app/)
 - **💾 Download EXE**: Visit the [live website](https://superbrowser-d6441.web.app/) to download the desktop application
 
 ---
