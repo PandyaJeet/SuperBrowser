@@ -3,7 +3,6 @@ name: star-check
 # Verification only: checks whether the PR author has starred the repository
 # and reports it as a passing/failing status on the PR. It does NOT close or
 # block the PR — maintainers use the result to decide whether to merge.
-
 on:
   pull_request_target:
     types: [opened, reopened, synchronize]
