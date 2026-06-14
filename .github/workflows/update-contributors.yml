@@ -1,0 +1,36 @@
+name: Update Contributors
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  update-contributors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update contributor badge in README
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const repo = context.repo.owner + '/' + context.repo.repo;
+            const badge = '![Contributors](https://contrib.rocks/image?repo=' + repo + '&columns=10)';
+            const section = '## Contributors\n\n' + badge + '\n';
+            const fs = require('fs');
+            const readme = fs.readFileSync('README.md', 'utf8');
+            if (readme.includes('## Contributors')) {
+              const updated = readme.replace(/## Contributors[\s\S]*?(?=\n## |$)/, section);
+              fs.writeFileSync('README.md', updated);
+            } else {
+              fs.appendFileSync('README.md', '\n' + section);
+            }
+
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update contributors list [skip ci]"
