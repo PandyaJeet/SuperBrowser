@@ -135,13 +135,13 @@ export default function App() {
       const hasContext = context.queries.length > 0 || context.results.length > 0 || context.visited_pages.length > 0
       if (hasContext) {
         fetch(`${API_BASE}/api/search/ai/contextual`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ query: tabData.query, persona: searchPersona, context, region: userRegion }) })
-          .then(r => r.json()).then(onSuccess).catch(onError).finally(onDone)
+          .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d?.detail || 'Search failed'); return d; }).then(onSuccess).catch(onError).finally(onDone)
         return
       }
     }
     let url = `${API_BASE}${endpoints[tabData.activeMode]}?q=${encodeURIComponent(tabData.query)}&session_id=${tabData.sessionId}&gl=${userRegion}`
     if (tabData.activeMode === 'ai') url += `&persona=${searchPersona}`
-    fetch(url, { signal: controller.signal }).then(r => r.json()).then(onSuccess).catch(onError).finally(onDone)
+    fetch(url, { signal: controller.signal }).then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d?.detail || 'Search failed'); return d; }).then(onSuccess).catch(onError).finally(onDone)
   }, [contextManager])
 
   const handleSearch = useCallback((tabId, searchPersona = "default") => {
