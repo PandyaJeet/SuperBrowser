@@ -23,5 +23,5 @@ export function getApiBase() {
     );
   }
 
-  return window.location.href.replace(/:\d+.*/, ":8000").replace(/\/$/, "");
+  return window.location.origin.replace(/:\d+$/, "") + ":8000";
 }
