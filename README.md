@@ -319,9 +319,9 @@ SuperBrowser/
 │   └── requirements.txt
 ├── frontend/                # React + Vite + Electron
 │   ├── src/
-│   │   ├── App.jsx          # App shell, tabs, search dispatch
-│   │   ├── components/      # AiInput, CommunityResults, ProductCarousel, …
-│   │   ├── config/apiBase.js# API base resolution (web/Codespaces/Electron)
+│   │   ├── App.jsx           # App shell, tabs, search dispatch
+│   │   ├── components/       # AiInput, CommunityResults, ProductCarousel, …
+│   │   ├── config/apiBase.js # API base resolution (web/Codespaces/Electron)
 │   │   └── useContextManager.js
 │   └── electron/            # main.cjs, preload.cjs (desktop runtime)
 ├── systemprompt/            # Persona system prompts (perplexity, sonnet, …)
