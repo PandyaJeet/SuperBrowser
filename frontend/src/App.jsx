@@ -156,66 +156,83 @@ export default function App() {
     return () => { window.removeEventListener("beforeunload", stopSession); stopSession() }
   }, [appSessionId, contextManager])
 
-  const updateTab = useCallback((tabId, updates) => {
+const updateTab = useCallback((tabId, updates) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t))
   }, [])
 
+  // Refactored clean search signature utilizing strict Electron IPC Tunneling
   const performSearch = useCallback((tabId, tabData, searchPersona = "default") => {
-    const endpoints = { seo: `/api/search/seo`, ai: `/api/search/ai`, community: `/api/search/community` }
     const prev = searchControllersRef.current[tabId]
     if (prev) prev.abort()
     const controller = new AbortController()
     searchControllersRef.current[tabId] = controller
+    
     const onSuccess = (data) => {
       setTabs(p => p.map(t => t.id === tabId ? { ...t, results: data, loading: false } : t))
-      if (Array.isArray(data?.results) && data.results.length > 0) contextManager.addResults(tabId, tabData.sessionId, data.results)
+      if (Array.isArray(data?.results) && data.results.length > 0) {
+        contextManager.addResults(tabId, tabData.sessionId, data.results)
+      }
     }
     const onError = (error) => {
       if (error?.name === 'AbortError') return
       setTabs(p => p.map(t => t.id === tabId ? { ...t, error: "Search failed. Please try again.", loading: false } : t))
     }
-    const onDone = () => { if (searchControllersRef.current[tabId] === controller) delete searchControllersRef.current[tabId] }
+    const onDone = () => { 
+      if (searchControllersRef.current[tabId] === controller) delete searchControllersRef.current[tabId] 
+    }
     
+    // Core Logic: Always check for Electron IPC Bridge availability first
+    const isElectron = Boolean(window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.search)
+
+    if (isElectron) {
+      const searchBridge = window.superBrowserDesktop.search
+      let bridgePromise
+
+      if (tabData.activeMode === 'seo') {
+        bridgePromise = searchBridge.seo(tabData.query, tabData.sessionId, searchPersona, userRegion)
+      } else if (tabData.activeMode === 'ai') {
+        bridgePromise = searchBridge.ai(tabData.query, tabData.sessionId, searchPersona, userRegion)
+      } else if (tabData.activeMode === 'community') {
+        bridgePromise = searchBridge.community(tabData.query, tabData.sessionId, searchPersona, userRegion)
+      }
+
+      if (bridgePromise) {
+        bridgePromise.then(onSuccess).catch(onError).finally(onDone)
+        return
+      }
+    }
+
+    // Secure contextual block / web app view standard pipeline fallback
     if (tabData.activeMode === 'ai') {
       const context = contextManager.getAIContext(tabId)
-      const hasContext = context.queries.length > 0 || context.results.length > 0 || context.visited_pages.length > 0
-      if (hasContext) {
-        fetch(`${API_BASE}/api/search/ai/contextual`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ query: tabData.query, persona: searchPersona, context, region: userRegion }) })
+      if (context.queries.length > 0 || context.results.length > 0 || context.visited_pages.length > 0) {
+        fetch(`${API_BASE}/api/search/ai/contextual`, { 
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' }, 
+          signal: controller.signal, 
+          body: JSON.stringify({ query: tabData.query, persona: searchPersona, context, region: userRegion }) 
+        })
           .then(r => r.json()).then(onSuccess).catch(onError).finally(onDone)
         return
       }
     }
+
+    // Default target fallbacks outside native Electron runtime environment (e.g., standard browser view)
+    const endpoints = { seo: `/api/search/seo`, ai: `/api/search/ai`, community: `/api/search/community` }
     let url = `${API_BASE}${endpoints[tabData.activeMode]}?q=${encodeURIComponent(tabData.query)}&session_id=${tabData.sessionId}&gl=${userRegion}`
     if (tabData.activeMode === 'ai') url += `&persona=${searchPersona}`
+    
     fetch(url, { signal: controller.signal }).then(r => r.json()).then(onSuccess).catch(onError).finally(onDone)
   }, [contextManager, userRegion])
 
+  // Map handleSearch to performSearch to eliminate execution anomalies across the JSX elements
   const handleSearch = useCallback((tabId, searchPersona = "default") => {
-    setTabs(currentTabs => {
-      const tab = currentTabs.find(t => t.id === tabId)
-      if (!tab?.query.trim()) return currentTabs
-      contextManager.addQuery(tabId, tab.sessionId, tab.query, tab.activeMode)
-      performSearch(tabId, tab, searchPersona)
-      return currentTabs.map(t => {
-        if (t.id !== tabId) return t
-        return { ...t, loading: true, error: null, title: t.query.slice(0, 25), history: [...t.history, { query: t.query, mode: t.activeMode }].slice(-10) }
-      })
-    })
-  }, [performSearch, contextManager])
-
-  const handleModeChange = useCallback((mode) => {
-    setTabs(currentTabs => {
-      const tab = currentTabs.find(t => t.id === activeTabId)
-      if (!tab) return currentTabs
-      const shouldSearch = tab.query && tab.results
-      const updatedTab = { ...tab, activeMode: mode }
-      if (shouldSearch) {
-        performSearch(activeTabId, updatedTab, persona)
-        return currentTabs.map(t => { if (t.id !== activeTabId) return t; return { ...updatedTab, loading: true, error: null, history: [...t.history, { query: t.query, mode }].slice(-10) } })
-      }
-      return currentTabs.map(t => t.id === activeTabId ? updatedTab : t)
-    })
-  }, [activeTabId, performSearch, persona])
+    const targetTab = tabs.find(t => t.id === tabId)
+    if (!targetTab || !targetTab.query?.trim()) return
+    
+    setTabs(p => p.map(t => t.id === tabId ? { ...t, loading: true, error: null } : t))
+    performSearch(tabId, targetTab, searchPersona)
+  }, [tabs, performSearch])
 
   function handleAddTab() {
     const n = createNewTab(appSessionId)
@@ -649,10 +666,10 @@ function SEOResults({ results, onOpenLink, query = "" }) {
   )
 }
 
-function AIResults({ AntiquatedResults }) {
-  const answer = AntiquatedResults?.answer || ''
-  const isLiveData = AntiquatedResults?.live_data === true
-  const sourceCount = AntiquatedResults?.sources_scraped || 0
+function AIResults({ results }) {
+  const answer = results?.answer || results?.response || ''
+  const isLiveData = results?.live_data === true
+  const sourceCount = results?.sources_scraped || 0
   return (
     <div className="max-w-3xl space-y-6 animate-fade-in-up">
       {answer ? (
