@@ -29,12 +29,14 @@ class CommunityResponse(BaseModel):
     summary="Get community insights for a query",
     description="Searches community platforms like Reddit and returns summarized insights and discussions related to the query."
 )
-async def get_community(q: str = Query(default=None)):
-    if not q:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "query param q is required"}
-        )
+async def get_community(
+    q: str = Query(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Search query"
+    )
+):
 
     key = cache_key(q, "all", "community")
     cached = get_cached(key)
