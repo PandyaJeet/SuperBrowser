@@ -113,7 +113,7 @@ export default function App() {
   const [activeTabId, setActiveTabId] = useState(tabsState.activeId)
   const [showHistory, setShowHistory] = useState(false)
   const [showPricing, setShowPricing] = useState(false)
-  const [theme, setTheme] = useState(getInitialTheme)
+  //const [theme, setTheme] = useState(getInitialTheme)
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false)
 
   const [showContextInfo, setShowContextInfo] = useState(false)
