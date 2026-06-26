@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer } = require("electron");
+const path = require("path");
 
 function safeInvoke(channel, payload) {
   return ipcRenderer.invoke(channel, payload);
@@ -8,6 +9,7 @@ contextBridge.exposeInMainWorld("superBrowserDesktop", {
   platform: process.platform,
   isElectron: true,
   backendUrl: process.env.SUPERBROWSER_BACKEND_URL || "http://127.0.0.1:8000",
+  webviewPreloadPath: "file://" + path.join(__dirname, "webview-preload.cjs"),
   backend: {
     getStatus: () => safeInvoke("backend:get-status"),
     getUrl: () => safeInvoke("backend:get-url"),
@@ -15,6 +17,17 @@ contextBridge.exposeInMainWorld("superBrowserDesktop", {
   settings: {
     get: () => safeInvoke("settings:get"),
     set: (partialSettings) => safeInvoke("settings:set", partialSettings),
+  },
+  blocking: {
+    getStats: (webContentsId) => safeInvoke("blocking:get-stats", { webContentsId }),
+    getSettings: () => safeInvoke("blocking:get-settings"),
+    setDomainEnabled: (domain, enabled) => safeInvoke("blocking:set-domain-enabled", { domain, enabled }),
+    toggle: (type) => safeInvoke("blocking:toggle", { type }),
+    onStatsUpdate: (callback) => {
+      const handler = (_event, data) => callback(data);
+      ipcRenderer.on("blocking-stats-update", handler);
+      return () => ipcRenderer.removeListener("blocking-stats-update", handler);
+    }
   },
   context: {
     getTab: (sessionId, tabId) => safeInvoke("context:get-tab", { sessionId, tabId }),
@@ -39,3 +52,4 @@ contextBridge.exposeInMainWorld("superBrowserDesktop", {
     },
   },
 });
+

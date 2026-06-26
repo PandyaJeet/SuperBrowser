@@ -13,6 +13,8 @@ const {
   nativeImage,
   Notification,
 } = require("electron");
+const { initBlocker } = require("./blocker.cjs");
+
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 const DEFAULT_BACKEND_PORT = 8000;
@@ -275,7 +277,7 @@ async function startBackend() {
     });
     backendProcess.stdout.on("data", (chunk) => process.stdout.write(`[backend] ${chunk}`));
     backendProcess.stderr.on("data", (chunk) => process.stderr.write(`[backend] ${chunk}`));
-    const ready = await waitForBackendReady(backendBaseUrl, 12000);
+    const ready = await waitForBackendReady(backendBaseUrl, 30000);
     if (!ready) {
       stopBackend();
       throw new Error("Packaged backend executable failed to start.");
@@ -298,7 +300,7 @@ async function startBackend() {
   for (const candidate of candidates) {
     try {
       backendProcess = spawnBackend(candidate.cmd, candidate.args, port);
-      const ready = await waitForBackendReady(backendBaseUrl, 10000);
+      const ready = await waitForBackendReady(backendBaseUrl, 30000);
       if (ready) {
         started = true;
         backendStatus = {
@@ -563,6 +565,9 @@ app.whenReady().then(() => {
   createAppMenu();
   createTray();
   registerIpcHandlers();
+  initBlocker().catch((err) => {
+    logEvent("error", "Blocker initialization failed", { error: String(err) });
+  });
   startBackend()
     .catch(async (error) => {
       logEvent("error", "Backend startup failed", { error: String(error.message || error) });

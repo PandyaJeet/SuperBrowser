@@ -7,6 +7,8 @@ const LazyBackgroundOrb = lazy(() => import('./components/BackgroundOrb'))
 import { ContinuousPaginationDemo } from './components/ContinuousPagination'
 import { AiInput } from './components/AiInput'
 import { ProductCarousel } from './components/ProductCarousel'
+import ShieldsPanel from './components/ShieldsPanel'
+
 
 const PERSONAS = [
   { id: "default", label: "Default", desc: "Raw Groq" },
@@ -113,7 +115,6 @@ export default function App() {
   const [activeTabId, setActiveTabId] = useState(tabsState.activeId)
   const [showHistory, setShowHistory] = useState(false)
   const [showPricing, setShowPricing] = useState(false)
-  const [theme, setTheme] = useState(getInitialTheme)
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false)
 
   const [showContextInfo, setShowContextInfo] = useState(false)
@@ -1031,9 +1032,10 @@ function BrowserPanel({ url, title, onClose }) {
   return (
     <div className="h-full flex flex-col bg-white animate-fade-in-up">
       <div className="px-4 py-2 border-b border-[var(--border-color)] flex items-center gap-3">
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 relative">
           <button onClick={onClose} className="p-1.5 rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Back"><ChevronLeftIcon /></button>
           <button onClick={reloadWebview} className="p-1.5 rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors" title="Reload"><RefreshIcon /></button>
+          <ShieldsPanel url={url} webviewRef={webviewRef} />
         </div>
         <input value={url} readOnly className="flex-1 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-sm rounded-lg px-3 py-1.5 outline-none text-[var(--text-secondary)]" />
       </div>
@@ -1042,6 +1044,8 @@ function BrowserPanel({ url, title, onClose }) {
         ref={webviewRef}
         id={`webview-${url}`}
         src={url}
+        partition="persist:superbrowser"
+        preload={window.superBrowserDesktop?.webviewPreloadPath}
         className="w-full flex-1"
         style={{ minHeight: 0 }}
       />
