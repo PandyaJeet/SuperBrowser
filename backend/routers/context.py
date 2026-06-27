@@ -24,15 +24,7 @@ def verify_token(x_session_token: str = Header(default="")):
     if not VALID_TOKEN or not secrets.compare_digest(x_session_token, VALID_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-IS_DEVELOPMENT = os.getenv("ENV", "development").lower() == "development"
-
-# Apply authentication headers ONLY if we are NOT in development mode
-router_dependencies = [] if IS_DEVELOPMENT else [Depends(verify_token)]
-
-router = APIRouter(dependencies=router_dependencies)
-#router = APIRouter()
-
-
+router = APIRouter(dependencies=[Depends(verify_token)])
 
 _context_store: Dict[str, Dict[str, Dict]] = {}
 _session_store: Dict[str, Dict[str, Optional[str]]] = {}
