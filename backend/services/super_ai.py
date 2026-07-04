@@ -1,7 +1,9 @@
 import asyncio
+import os
 from typing import Dict, Optional
 
 from services.groq_service import ask_groq
+from services.instant_results import create_instant_ai_response
 from services.personas import get_persona
 from services.query_classifier import classify_query
 
@@ -242,10 +244,19 @@ def format_context_for_ai(context: Optional[Dict]) -> str:
     return "\n".join(formatted) if formatted else "No significant context available."
 
 
-async def get_ai_consensus(query: str, context: Optional[Dict] = None, persona: str = "default", gl: str = "us") -> dict:
+async def get_ai_consensus(
+    query: str,
+    context: Optional[Dict] = None,
+    persona: str = "default",
+    gl: str = "us",
+    model: Optional[str] = None
+) -> dict:
     """Get AI-generated consensus answer using the specified persona and browsing context."""
     normalized_persona = (persona or "default").strip().lower()
     persona_config = get_persona(normalized_persona)
+
+    if not os.getenv("GROQ_API_KEY"):
+        return create_instant_ai_response(query, persona=normalized_persona, gl=gl)
     
     # ─── Step 1: Classify the query ───────────────────────────────
     query_category = await classify_query(query)
@@ -260,18 +271,22 @@ async def get_ai_consensus(query: str, context: Optional[Dict] = None, persona: 
         
         if scraped_results:
             prompt = _build_live_data_prompt(query, scraped_results)
+            selected_model = model or DEFAULT_SUPERAI_MODEL
             
             answer = await ask_groq(
                 prompt=prompt,
-                model=DEFAULT_SUPERAI_MODEL,
+                model=selected_model,
                 system_prompt=LIVE_DATA_SYSTEM_PROMPT,
             )
+
+            if not answer or answer.startswith("Groq API"):
+                return create_instant_ai_response(query, persona=normalized_persona, gl=gl)
 
             return {
                 "query": query,
                 "answer": answer,
                 "persona_used": "SuperAI Product Analyst",
-                "model_used": DEFAULT_SUPERAI_MODEL,
+                "model_used": selected_model,
                 "context_used": True,
                 "live_data": True,
                 "sources_scraped": len(scraped_results),
@@ -287,27 +302,30 @@ async def get_ai_consensus(query: str, context: Optional[Dict] = None, persona: 
     use_default_summary = normalized_persona == "default" or persona_config.get("label") == "Default"
 
     if use_default_summary:
-        model = DEFAULT_SUPERAI_MODEL
+        selected_model = model or DEFAULT_SUPERAI_MODEL
         system_prompt = DEFAULT_SUPERAI_SYSTEM_PROMPT
         prompt = _build_default_summary_prompt(query, context, context_str)
         persona_used = "SuperAI Default Summary"
     else:
-        model = persona_config["model"]
+        selected_model = model or persona_config.get("model") or DEFAULT_SUPERAI_MODEL
         system_prompt = persona_config["system_prompt"]
         prompt = _build_persona_prompt(query, context_str)
         persona_used = persona_config["label"]
 
     answer = await ask_groq(
         prompt=prompt,
-        model=model,
+        model=selected_model,
         system_prompt=system_prompt,
     )
+
+    if not answer or answer.startswith("Groq API"):
+        return create_instant_ai_response(query, persona=normalized_persona, gl=gl)
 
     return {
         "query": query,
         "answer": answer,
         "persona_used": persona_used,
-        "model_used": model,
+        "model_used": selected_model,
         "context_used": bool(context),
         "live_data": False,
         "status": "success",

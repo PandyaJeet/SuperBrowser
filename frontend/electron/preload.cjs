@@ -7,6 +7,7 @@ function safeInvoke(channel, payload) {
 contextBridge.exposeInMainWorld("superBrowserDesktop", {
   platform: process.platform,
   isElectron: true,
+  isIncognito: process.argv.includes("--superbrowser-incognito=1"),
   backendUrl: process.env.SUPERBROWSER_BACKEND_URL || "http://127.0.0.1:8000",
   backend: {
     getStatus: () => safeInvoke("backend:get-status"),
@@ -36,7 +37,39 @@ contextBridge.exposeInMainWorld("superBrowserDesktop", {
   },
   app: {
     notify: (title, body) => safeInvoke("app:notify", { title, body }),
+    newTab: () => safeInvoke("app:new-tab"),
+    newWindow: () => safeInvoke("app:new-window"),
+    newIncognitoWindow: () => safeInvoke("app:new-incognito-window"),
+    openExternal: (url) => safeInvoke("app:open-external", { url }),
+    print: () => safeInvoke("app:print"),
+    printPreview: (title) => safeInvoke("app:print-preview", { title }),
+    showPrintPreview: (pdfData, title) => safeInvoke("app:show-print-preview", { pdfData, title }),
+    findInPage: (text, options) => safeInvoke("app:find-in-page", { text, options }),
+    stopFindInPage: () => safeInvoke("app:stop-find-in-page"),
+    clearBrowsingData: () => safeInvoke("app:clear-browsing-data"),
+    toggleFullscreen: () => safeInvoke("app:toggle-fullscreen"),
+    quit: () => safeInvoke("app:quit"),
     show: () => safeInvoke("app:show"),
+    onNewTab: (callback) => {
+      const handler = () => callback();
+      ipcRenderer.on("app:new-tab", handler);
+      return () => ipcRenderer.removeListener("app:new-tab", handler);
+    },
+    onFindInPage: (callback) => {
+      const handler = () => callback();
+      ipcRenderer.on("app:find-in-page", handler);
+      return () => ipcRenderer.removeListener("app:find-in-page", handler);
+    },
+    onDeleteBrowsingData: (callback) => {
+      const handler = () => callback();
+      ipcRenderer.on("app:delete-browsing-data", handler);
+      return () => ipcRenderer.removeListener("app:delete-browsing-data", handler);
+    },
+    onOpenDownloads: (callback) => {
+      const handler = () => callback();
+      ipcRenderer.on("app:open-downloads", handler);
+      return () => ipcRenderer.removeListener("app:open-downloads", handler);
+    },
     onDeepLink: (callback) => {
       const handler = (_event, url) => callback(url);
       ipcRenderer.on("deep-link", handler);

@@ -43,6 +43,7 @@ app.include_router(community.router, prefix="/api/search", tags=["Community"], d
 
 # Context router already enforces its own inner dependencies or mounts under context directly
 app.include_router(context.router, prefix="/api", tags=["Context"])
+app.include_router(pages.router, prefix="/api", tags=["Pages"])
 
 
 @app.get("/")

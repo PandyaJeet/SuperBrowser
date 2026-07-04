@@ -16,12 +16,27 @@ async def get_community_insights(query: str) -> dict:
     """Fetch community insights from multiple platforms and summarize with AI."""
 
     # Fetch from all four sources in parallel
+    # Each scraper runs independently so one failure doesn't crash the entire route
     stack_results, reddit_results, hn_results, devto_results = await asyncio.gather(
         scrape_stackexchange(query),
         scrape_reddit(query),
         scrape_hackernews(query),
         scrape_devto(query),
+        return_exceptions=True,
     )
+
+    # Replace failed scrapers with empty results (error already logged by the scraper)
+    for i, result in enumerate([stack_results, reddit_results, hn_results, devto_results]):
+        if isinstance(result, Exception):
+            logger.warning("Community scraper %d failed: %s", i, result)
+    if isinstance(stack_results, Exception):
+        stack_results = []
+    if isinstance(reddit_results, Exception):
+        reddit_results = []
+    if isinstance(hn_results, Exception):
+        hn_results = []
+    if isinstance(devto_results, Exception):
+        devto_results = []
 
     # Build context strings from all sources
     # Stack: up to 2 questions with answers

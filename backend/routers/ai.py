@@ -14,9 +14,10 @@ class ContextualAIRequest(BaseModel):
     persona: str = "default"
     context: Optional[Dict] = None
     region: str = "us"
+    model: Optional[str] = "llama-3.1-8b-instant"
 
 
-# ── Response Models (NEW) ───────────────────────────────────
+# ── Response Models ───────────────────────────────────────
 class AISource(BaseModel):
     title: Optional[str] = None
     url: Optional[str] = None
@@ -36,9 +37,9 @@ class AIResponse(BaseModel):
     summary="Get AI-powered search answer",
     description="Legacy endpoint that returns an AI-generated answer for a given query using the selected persona and region."
 )
-async def get_ai(q: str, session_id: str = "", persona: str = "default", gl: str = "us"):
+async def get_ai(q: str, session_id: str = "", persona: str = "default", gl: str = "us", model: str = "llama-3.1-8b-instant"):
     """Legacy endpoint for backward compatibility"""
-    return await get_ai_consensus(query=q, persona=persona, gl=gl)
+    return await get_ai_consensus(query=q, persona=persona, gl=gl, model=model)
 
 
 @router.post(
@@ -50,11 +51,12 @@ async def get_ai(q: str, session_id: str = "", persona: str = "default", gl: str
 async def get_ai_with_context(request: ContextualAIRequest):
     """
     AI endpoint with browsing context support
-    Accepts: query, persona, and browsing context (queries, results, visited pages)
+    Accepts: query, persona, browsing context, and model
     """
     return await get_ai_consensus(
         query=request.query,
         persona=request.persona,
         context=request.context,
-        gl=request.region
+        gl=request.region,
+        model=request.model
     )

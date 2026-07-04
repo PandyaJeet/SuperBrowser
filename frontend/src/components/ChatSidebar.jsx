@@ -45,7 +45,7 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
   const [inputText, setInputText] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [models, setModels] = useState([])
-  const [selectedModel, setSelectedModel] = useState('llama-3.1-8b-instant')
+  const [selectedModel, setSelectedModel] = useState('default')
   const [showModelSelector, setShowModelSelector] = useState(false)
   const [error, setError] = useState(null)
 
@@ -59,7 +59,7 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
       .then(data => {
         if (data.models) {
           setModels(data.models)
-          setSelectedModel(data.default || 'llama-3.1-8b-instant')
+          setSelectedModel(data.default || 'default')
         }
       })
       .catch(() => {})
@@ -245,7 +245,7 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
     }
   }
 
-  const currentModel = models.find(m => m.id === selectedModel) || { name: 'Llama 3.1 8B', id: selectedModel }
+  const currentModel = models.find(m => m.id === selectedModel) || { name: 'Llama 3.1 8B (Default)', id: selectedModel }
 
   // Format date display for session selector
   const formatSessionLabel = (session) => {
