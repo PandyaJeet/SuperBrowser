@@ -78,6 +78,54 @@
   --scrollbar-thumb-hover: rgba(216, 226, 240, 0.3);
 }
 
+:root[data-incognito="true"] {
+  color-scheme: dark;
+  --bg-page: #202124;
+  --bg-surface: #292a2d;
+  --bg-elevated: #303134;
+  --bg-hover: #3c4043;
+  --surface-translucent: rgba(41, 42, 45, 0.9);
+  --hero-glow: rgba(95, 99, 104, 0.32);
+  --text-primary: #f1f3f4;
+  --text-secondary: #bdc1c6;
+  --text-tertiary: #9aa0a6;
+  --text-inverse: #202124;
+  --link-primary: #8ab4f8;
+  --link-hover: #aecbfa;
+  --link-url: #81c995;
+  --border-color: rgba(232, 234, 237, 0.14);
+  --border-hover: rgba(232, 234, 237, 0.26);
+  --action-primary: #8ab4f8;
+  --action-hover: #aecbfa;
+  --accent-soft: rgba(138, 180, 248, 0.16);
+  --info-bg: rgba(138, 180, 248, 0.12);
+  --info-border: rgba(138, 180, 248, 0.22);
+  --shadow-soft: 0 8px 22px rgba(0, 0, 0, 0.38);
+  --shadow-strong: 0 22px 48px rgba(0, 0, 0, 0.5);
+  --scrollbar-thumb: rgba(232, 234, 237, 0.2);
+  --scrollbar-thumb-hover: rgba(232, 234, 237, 0.34);
+}
+
+:root[data-incognito="true"] .bg-white {
+  background-color: var(--bg-surface) !important;
+}
+
+:root[data-incognito="true"] .bg-white\/70,
+:root[data-incognito="true"] .bg-white\/80 {
+  background-color: rgba(41, 42, 45, 0.82) !important;
+}
+
+:root[data-incognito="true"] .text-black {
+  color: var(--text-primary) !important;
+}
+
+:root[data-incognito="true"] input,
+:root[data-incognito="true"] textarea,
+:root[data-incognito="true"] select {
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
 body {
   margin: 0;
   background-color: var(--bg-page);
@@ -402,5 +450,33 @@ textarea {
 
   .pricing-row-label-header {
     min-height: 70px;
+  }
+}
+
+@media print {
+  .no-print,
+  .browser-menu {
+    display: none !important;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  .print-surface {
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+  }
+
+  iframe[data-active-browser-view="true"],
+  webview[data-active-browser-view="true"] {
+    display: block !important;
+    width: 100% !important;
+    height: 100vh !important;
+    border: 0 !important;
   }
 }

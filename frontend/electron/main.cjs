@@ -6,6 +6,7 @@ const {
   app,
   BrowserWindow,
   shell,
+  session,
   dialog,
   ipcMain,
   Menu,
@@ -21,12 +22,18 @@ let backendProcess = null;
 let backendBaseUrl = `http://${BACKEND_HOST}:${DEFAULT_BACKEND_PORT}`;
 let mainWindow = null;
 let tray = null;
+let downloads = [];
+let downloadsFolderCache = { ts: 0, items: [] };
+const trackedDownloadSessions = new WeakSet();
 let backendStatus = {
   running: false,
   url: backendBaseUrl,
   pid: null,
   lastError: null,
 };
+
+process.stdout.on?.("error", () => {});
+process.stderr.on?.("error", () => {});
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -67,6 +74,19 @@ function logEvent(level, message, meta = {}) {
   fs.appendFileSync(logPath, `${line}\n`, "utf8");
 }
 
+function writeProcessOutput(stream, message) {
+  if (!stream || stream.destroyed || !stream.writable) return;
+  try {
+    stream.write(message, () => {});
+  } catch {
+    // GUI Windows builds can have closed stdout/stderr pipes.
+  }
+}
+
+function logBackendOutput(stream, chunk) {
+  writeProcessOutput(stream, `[backend] ${chunk}`);
+}
+
 function createTrayImage() {
   // 1x1 transparent png
   return nativeImage.createFromDataURL(
@@ -79,20 +99,182 @@ function showNotification(title, body) {
   new Notification({ title, body }).show();
 }
 
+function createPdfPreviewWindow(pdfBuffer, title = "Print Preview") {
+  const parent = BrowserWindow.getFocusedWindow() || mainWindow;
+  const previewWindow = new BrowserWindow({
+    width: 1100,
+    height: 850,
+    minWidth: 800,
+    minHeight: 600,
+    title,
+    parent: parent && !parent.isDestroyed() ? parent : undefined,
+    backgroundColor: "#ffffff",
+    webPreferences: {
+      plugins: true,
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  const encoded = Buffer.from(pdfBuffer).toString("base64");
+  previewWindow.loadURL(`data:application/pdf;base64,${encoded}`);
+  return previewWindow;
+}
+
+function normalizePdfData(pdfData) {
+  if (Buffer.isBuffer(pdfData)) return pdfData;
+  if (Array.isArray(pdfData)) return Buffer.from(pdfData);
+  if (pdfData instanceof ArrayBuffer) return Buffer.from(pdfData);
+  if (ArrayBuffer.isView(pdfData)) {
+    return Buffer.from(pdfData.buffer, pdfData.byteOffset, pdfData.byteLength);
+  }
+  throw new Error("PDF data must be bytes");
+}
+
 function validateString(value, name) {
   if (typeof value !== "string") throw new Error(`${name} must be a string`);
   return value;
 }
 
+function sendDownloadsToRenderer() {
+  const targetWindow = BrowserWindow.getFocusedWindow() || mainWindow;
+  if (!targetWindow || targetWindow.isDestroyed()) return;
+  targetWindow.webContents.send("app:open-downloads");
+  targetWindow.show();
+  targetWindow.focus();
+}
+
+function serializeDownload(record) {
+  return {
+    id: record.id,
+    fileName: record.fileName,
+    savePath: record.savePath,
+    fileSize: record.fileSize,
+    receivedBytes: record.receivedBytes,
+    state: record.state,
+    startTime: record.startTime,
+    endTime: record.endTime,
+  };
+}
+
+async function getDownloadsFolderFiles() {
+  if (Date.now() - downloadsFolderCache.ts < 5000) {
+    return downloadsFolderCache.items;
+  }
+
+  const downloadsPath = app.getPath("downloads");
+  const entries = await fs.promises.readdir(downloadsPath, { withFileTypes: true });
+  const files = await Promise.all(entries
+    .filter((entry) => entry.isFile())
+    .map(async (entry) => {
+      const savePath = path.join(downloadsPath, entry.name);
+      try {
+        const stats = await fs.promises.stat(savePath);
+        return serializeDownload({
+          id: `folder:${savePath}`,
+          fileName: entry.name,
+          savePath,
+          fileSize: stats.size,
+          receivedBytes: stats.size,
+          state: "completed",
+          startTime: stats.birthtime?.toISOString?.() || stats.mtime.toISOString(),
+          endTime: stats.mtime.toISOString(),
+        });
+      } catch {
+        return null;
+      }
+    }));
+
+  const items = files
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.endTime || 0) - new Date(a.endTime || 0))
+    .slice(0, 200);
+  downloadsFolderCache = { ts: Date.now(), items };
+  return items;
+}
+
+function registerDownloadTracking(targetSession = session.defaultSession) {
+  if (!targetSession || trackedDownloadSessions.has(targetSession)) return;
+  trackedDownloadSessions.add(targetSession);
+
+  targetSession.on("will-download", (_event, item) => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const record = {
+      id,
+      fileName: item.getFilename(),
+      savePath: item.getSavePath(),
+      fileSize: item.getTotalBytes(),
+      receivedBytes: item.getReceivedBytes(),
+      state: "progress",
+      startTime: new Date().toISOString(),
+      endTime: null,
+    };
+
+    downloads = [record, ...downloads].slice(0, 200);
+
+    item.on("updated", (_event, state) => {
+      record.fileName = item.getFilename();
+      record.savePath = item.getSavePath();
+      record.fileSize = item.getTotalBytes();
+      record.receivedBytes = item.getReceivedBytes();
+      record.state = state === "interrupted" ? "interrupted" : "progress";
+    });
+
+    item.once("done", (_event, state) => {
+      record.fileName = item.getFilename();
+      record.savePath = item.getSavePath();
+      record.fileSize = item.getTotalBytes();
+      record.receivedBytes = item.getReceivedBytes();
+      record.state = state;
+      record.endTime = new Date().toISOString();
+      downloadsFolderCache = { ts: 0, items: [] };
+    });
+  });
+}
+
 function createAppMenu() {
+  const sendNewTabToRenderer = () => {
+    const targetWindow = BrowserWindow.getFocusedWindow() || mainWindow;
+    if (!targetWindow || targetWindow.isDestroyed()) return;
+    targetWindow.webContents.send("app:new-tab");
+    targetWindow.show();
+    targetWindow.focus();
+  };
+
   const template = [
     {
       label: "File",
       submenu: [
         {
+          label: "New Tab",
+          accelerator: "CmdOrCtrl+T",
+          click: sendNewTabToRenderer,
+        },
+        {
           label: "New Window",
           accelerator: "CmdOrCtrl+N",
           click: () => createMainWindow(),
+        },
+        {
+          label: "New Incognito Window",
+          accelerator: "CmdOrCtrl+Shift+N",
+          click: () => createIncognitoWindow(),
+        },
+        {
+          label: "Downloads",
+          accelerator: "CmdOrCtrl+J",
+          click: sendDownloadsToRenderer,
+        },
+        {
+          label: "Delete Browsing Data",
+          accelerator: "CmdOrCtrl+Shift+Delete",
+          click: () => {
+            const targetWindow = BrowserWindow.getFocusedWindow() || mainWindow;
+            if (targetWindow && !targetWindow.isDestroyed()) {
+              targetWindow.webContents.send("app:delete-browsing-data");
+            }
+          },
         },
         { type: "separator" },
         { role: "quit" },
@@ -108,6 +290,17 @@ function createAppMenu() {
         { role: "reload" },
         { role: "forceReload" },
         { role: "toggleDevTools" },
+        { type: "separator" },
+        {
+          label: "Find in Page",
+          accelerator: "CmdOrCtrl+F",
+          click: () => {
+            const targetWindow = BrowserWindow.getFocusedWindow() || mainWindow;
+            if (targetWindow && !targetWindow.isDestroyed()) {
+              targetWindow.webContents.send("app:find-in-page");
+            }
+          },
+        },
         { type: "separator" },
         { role: "resetZoom" },
         { role: "zoomIn" },
@@ -241,10 +434,10 @@ function spawnBackend(pythonCmd, pythonArgs, port) {
   );
 
   child.stdout.on("data", (chunk) => {
-    process.stdout.write(`[backend] ${chunk}`);
+    logBackendOutput(process.stdout, chunk);
   });
   child.stderr.on("data", (chunk) => {
-    process.stderr.write(`[backend] ${chunk}`);
+    logBackendOutput(process.stderr, chunk);
   });
 
   return child;
@@ -254,14 +447,14 @@ async function startBackend() {
   const port = await findAvailablePort();
   backendBaseUrl = `http://${BACKEND_HOST}:${port}`;
   process.env.SUPERBROWSER_BACKEND_URL = backendBaseUrl;
-  
+
   const settings = readSettings();
   if (!settings.sessionToken) {
     settings.sessionToken = require("crypto").randomBytes(32).toString('base64url');
     writeSettings({ sessionToken: settings.sessionToken });
   }
   process.env.SUPERBROWSER_SESSION_TOKEN = settings.sessionToken;
-  
+
   backendStatus = { running: false, url: backendBaseUrl, pid: null, lastError: null };
 
   const packagedExe = resolvePackagedBackendExecutable();
@@ -273,8 +466,8 @@ async function startBackend() {
       shell: false,
       windowsHide: true,
     });
-    backendProcess.stdout.on("data", (chunk) => process.stdout.write(`[backend] ${chunk}`));
-    backendProcess.stderr.on("data", (chunk) => process.stderr.write(`[backend] ${chunk}`));
+    backendProcess.stdout.on("data", (chunk) => logBackendOutput(process.stdout, chunk));
+    backendProcess.stderr.on("data", (chunk) => logBackendOutput(process.stderr, chunk));
     const ready = await waitForBackendReady(backendBaseUrl, 12000);
     if (!ready) {
       stopBackend();
@@ -467,22 +660,162 @@ function registerIpcHandlers() {
     return { ok: true };
   });
 
+  ipcMain.handle("app:new-window", () => {
+    createMainWindow();
+    return { ok: true };
+  });
+
+  ipcMain.handle("app:new-incognito-window", () => {
+    createIncognitoWindow();
+    return { ok: true };
+  });
+
+  ipcMain.handle("app:new-tab", (event) => {
+    const targetWindow = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow() || mainWindow;
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send("app:new-tab");
+      targetWindow.show();
+      targetWindow.focus();
+    }
+    return { ok: true };
+  });
+
+  ipcMain.handle("downloads:get-list", async () => {
+    const tracked = downloads.map(serializeDownload);
+    const folderFiles = await getDownloadsFolderFiles();
+    const seen = new Set(tracked.map(item => item.savePath).filter(Boolean));
+    return [
+      ...tracked,
+      ...folderFiles.filter(item => !seen.has(item.savePath)),
+    ].slice(0, 200);
+  });
+
+  ipcMain.handle("downloads:get-folder-files", () => getDownloadsFolderFiles());
+
+  ipcMain.handle("downloads:open-folder", async () => {
+    const errorMessage = await shell.openPath(app.getPath("downloads"));
+    if (errorMessage) throw new Error(errorMessage);
+    return { ok: true };
+  });
+
+  ipcMain.handle("downloads:open-file", async (_, { path: filePath } = {}) => {
+    validateString(filePath, "path");
+    const errorMessage = await shell.openPath(filePath);
+    if (errorMessage) throw new Error(errorMessage);
+    return { ok: true };
+  });
+
+  ipcMain.handle("downloads:show-in-folder", (_, { path: filePath } = {}) => {
+    validateString(filePath, "path");
+    shell.showItemInFolder(filePath);
+    return { ok: true };
+  });
+
+  ipcMain.handle("downloads:clear-list", () => {
+    downloads = [];
+    downloadsFolderCache = { ts: 0, items: [] };
+    return { ok: true };
+  });
+
+  ipcMain.handle("app:open-external", (_, { url }) => {
+    validateString(url, "url");
+    shell.openExternal(url);
+    return { ok: true };
+  });
+
+  ipcMain.handle("app:print", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) win.webContents.print();
+    return { ok: true };
+  });
+
+  ipcMain.handle("app:print-preview", async (event, { title } = {}) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return { ok: false };
+    const pdfBuffer = await win.webContents.printToPDF({
+      printBackground: true,
+      marginsType: 0,
+      preferCSSPageSize: true,
+    });
+    createPdfPreviewWindow(pdfBuffer, title || "SuperBrowser Print Preview");
+    return { ok: true };
+  });
+
+  ipcMain.handle("app:show-print-preview", (_, { pdfData, title } = {}) => {
+    const pdfBuffer = normalizePdfData(pdfData);
+    createPdfPreviewWindow(pdfBuffer, title || "SuperBrowser Print Preview");
+    return { ok: true };
+  });
+
+  ipcMain.handle("app:find-in-page", (event, { text, options } = {}) => {
+    validateString(text, "text");
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return { ok: false };
+    const requestId = win.webContents.findInPage(text, options || {});
+    return { ok: true, requestId };
+  });
+
+  ipcMain.handle("app:stop-find-in-page", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) win.webContents.stopFindInPage("clearSelection");
+    return { ok: true };
+  });
+
+  ipcMain.handle("app:clear-browsing-data", async (event) => {
+    const senderSession = event.sender.session || session.defaultSession;
+    await Promise.all([
+      senderSession.clearCache(),
+      senderSession.clearStorageData({
+        storages: ["cookies", "filesystem", "indexdb", "localstorage", "shadercache", "websql", "serviceworkers", "cachestorage"],
+      }),
+    ]);
+    return { ok: true };
+  });
+
+  ipcMain.handle("app:toggle-fullscreen", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) win.setFullScreen(!win.isFullScreen());
+    return { ok: true };
+  });
+
+  ipcMain.handle("app:quit", () => {
+    app.quit();
+    return { ok: true };
+  });
+
   ipcMain.handle("app:show", () => {
     if (mainWindow) {
       mainWindow.show();
       mainWindow.focus();
     }
     return { ok: true };
-    });
-    ipcMain.on('open-new-window', () => {
-  createMainWindow();
-});
-ipcMain.on('open-incognito-window', () => {
-    createIncognitoWindow();
   });
 }
 
-function createMainWindow() {
+function clearTemporarySession(tempSession) {
+  if (!tempSession) return;
+  Promise.allSettled([
+    tempSession.clearCache(),
+    tempSession.clearStorageData({
+      storages: ["cookies", "filesystem", "indexdb", "localstorage", "shadercache", "websql", "serviceworkers", "cachestorage"],
+    }),
+    tempSession.clearAuthCache?.(),
+  ]).catch(() => {});
+}
+
+function createIncognitoWindow() {
+  const incognitoPartition = `incognito:${Date.now()}`;
+  return createMainWindow({
+    incognito: true,
+    partition: incognitoPartition,
+    tempSession: session.fromPartition(incognitoPartition),
+  });
+}
+
+function createMainWindow(options = {}) {
+  const incognito = options.incognito === true;
+  const windowPartition = options.partition;
+  const tempSession = options.tempSession;
   const settings = readSettings();
   const bounds = settings.windowBounds || {};
   const win = new BrowserWindow({
@@ -501,36 +834,22 @@ function createMainWindow() {
       webviewTag: true,
       sandbox: !isDev,
       devTools: isDev,
+      partition: windowPartition,
+      additionalArguments: incognito ? ["--superbrowser-incognito=1"] : [],
     },
   });
-  mainWindow = win;
-  function createIncognitoWindow() {
-  const settings = readSettings();
-  const bounds = settings.windowBounds || {};
-  
-  const win = new BrowserWindow({
-    width: bounds.width || 1280,
-    height: bounds.height || 800,
-    x: Number.isInteger(bounds.x) ? bounds.x : undefined,
-    y: Number.isInteger(bounds.y) ? bounds.y : undefined,
-    minWidth: 1000,
-    webPreferences: {
-      partition: 'incognito_session', // Forces private, in-memory isolation
-      preload: path.join(__dirname, 'preload.cjs'), // Matches your file explorer!
-      contextIsolation: true,
-      nodeIntegration: false
-    }
+  registerDownloadTracking(win.webContents.session);
+  win.webContents.on("did-attach-webview", (_event, webContents) => {
+    registerDownloadTracking(webContents.session);
   });
-  if (isDev) {
-    win.loadURL(process.env.VITE_DEV_SERVER_URL); // Loads the frontend in development
+  if (incognito) {
+    win.setTitle("SuperBrowser - Incognito");
   } else {
-    win.loadFile(path.join(__dirname, '../dist/index.html')); // Loads compiled frontend in production
+    mainWindow = win;
   }
-}
 
   if (isDev) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
-    win.webContents.openDevTools({ mode: "detach" });
   } else {
     win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
@@ -546,14 +865,17 @@ function createMainWindow() {
   });
 
   const persistBounds = () => {
-    if (!mainWindow) return;
+    if (incognito || !mainWindow) return;
     const next = mainWindow.getBounds();
     writeSettings({ windowBounds: next });
   };
   win.on("resize", persistBounds);
   win.on("move", persistBounds);
+  if (incognito) {
+    win.once("closed", () => clearTemporarySession(tempSession));
+  }
   win.on("closed", () => {
-    mainWindow = null;
+    if (mainWindow === win) mainWindow = null;
   });
 }
 
@@ -562,6 +884,7 @@ app.whenReady().then(() => {
   app.setAsDefaultProtocolClient("superbrowser");
   createAppMenu();
   createTray();
+  registerDownloadTracking();
   registerIpcHandlers();
   startBackend()
     .catch(async (error) => {
@@ -619,28 +942,3 @@ app.on("before-quit", () => {
   logEvent("info", "App shutting down");
   stopBackend();
 });
-
-// SEC-02: Enforce scheme policy for all webview content at the process level
-app.on('web-contents-created', (_, contents) => {
-  if (contents.getType() === 'webview') {
-    // Block non-http(s) navigations at the Electron process level
-    contents.on('will-navigate', (event, navigationUrl) => {
-      try {
-        const parsed = new URL(navigationUrl)
-        if (!['http:', 'https:'].includes(parsed.protocol)) {
-          console.warn('[SuperBrowser][main] Blocked webview navigation:', parsed.protocol, navigationUrl)
-          event.preventDefault()
-        }
-      } catch {
-        console.warn('[SuperBrowser][main] Blocked malformed webview navigation URL:', navigationUrl)
-        event.preventDefault()
-      }
-    })
-
-    // Block all popup windows spawned by webview content
-    contents.setWindowOpenHandler(({ url }) => {
-      console.warn('[SuperBrowser][main] Blocked popup window to:', url)
-      return { action: 'deny' }
-    })
-  }
-})

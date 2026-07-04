@@ -152,7 +152,7 @@ async def scrape_google(query: str) -> list[dict]:
     google_status = "request_failed"
 
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             response = await client.get(
                 GOOGLE_SEARCH_URL,
                 params={"q": query, "num": "10", "hl": "en"},
@@ -175,7 +175,7 @@ async def scrape_google(query: str) -> list[dict]:
 
     # Fallback path: Startpage provides static HTML results in bot-heavy environments.
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             fallback_response = await client.get(
                 STARTPAGE_SEARCH_URL,
                 params={"query": query, "language": "english"},
@@ -184,15 +184,15 @@ async def scrape_google(query: str) -> list[dict]:
             )
             fallback_response.raise_for_status()
     except (httpx.RequestError, httpx.HTTPStatusError):
-        print(f"[google] status={google_status} parser=none results=0")
-        return []
+        fallback_response = None
 
-    fallback_results = _extract_startpage_results(fallback_response.text)
-    if fallback_results:
-        print(
-            f"[google] status={google_status} parser=startpage results={len(fallback_results)}"
-        )
-        return fallback_results
+    if fallback_response is not None:
+        fallback_results = _extract_startpage_results(fallback_response.text)
+        if fallback_results:
+            print(
+                f"[google] status={google_status} parser=startpage results={len(fallback_results)}"
+            )
+            return fallback_results
 
     # Final fallback path: use Brave web scraping and map into Google source shape.
     try:

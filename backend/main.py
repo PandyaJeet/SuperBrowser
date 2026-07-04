@@ -15,7 +15,7 @@ if not db_file.exists():
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import seo, ai, community, context
+from routers import seo, ai, community, context, pages
 
 app = FastAPI(title="SuperBrowser API")
 
@@ -38,6 +38,7 @@ app.include_router(seo.router, prefix="/api/search", tags=["SEO"])
 app.include_router(ai.router, prefix="/api/search", tags=["AI"])
 app.include_router(community.router, prefix="/api/search", tags=["Community"])
 app.include_router(context.router, prefix="/api", tags=["Context"])
+app.include_router(pages.router, prefix="/api", tags=["Pages"])
 
 
 @app.get("/")

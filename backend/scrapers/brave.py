@@ -12,7 +12,7 @@ async def scrape_brave(query: str) -> list[dict]:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             response = await client.get(
                 url,
                 params={"q": query, "source": "web"},
