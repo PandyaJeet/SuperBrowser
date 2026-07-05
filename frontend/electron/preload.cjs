@@ -30,13 +30,10 @@ contextBridge.exposeInMainWorld("superBrowserDesktop", {
     getModels: () => safeInvoke("context:get-models"),
     chat: (sessionId, message, tabId, model) => safeInvoke("context:chat", { sessionId, message, tabId, model }),
   },
-  downloads: {
-    getList: () => safeInvoke("downloads:get-list"),
-    getFolderFiles: () => safeInvoke("downloads:get-folder-files"),
-    openFolder: () => safeInvoke("downloads:open-folder"),
-    openFile: (path) => safeInvoke("downloads:open-file", { path }),
-    showInFolder: (path) => safeInvoke("downloads:show-in-folder", { path }),
-    clearList: () => safeInvoke("downloads:clear-list"),
+  search: {
+    seo: (q, sessionId, persona, gl) => safeInvoke("search:seo", { q, sessionId, persona, gl }),
+    ai: (q, sessionId, persona, gl) => safeInvoke("search:ai", { q, sessionId, persona, gl }),
+    community: (q, sessionId, persona, gl) => safeInvoke("search:community", { q, sessionId, persona, gl }),
   },
   app: {
     notify: (title, body) => safeInvoke("app:notify", { title, body }),

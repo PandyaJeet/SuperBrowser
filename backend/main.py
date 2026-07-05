@@ -12,10 +12,13 @@ db_file = backend_dir / "database" / "context_db.py"
 if not db_file.exists():
     import setup_database
 
-from fastapi import FastAPI
+# 1. Added Depends here to handle authentication middleware
+from fastapi import FastAPI, Depends 
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import seo, ai, community, context, pages
+from routers import seo, ai, community, context
+# 2. Extract the specific validation function to use as a global route guard
+from routers.context import verify_token 
 
 app = FastAPI(title="SuperBrowser API")
 
@@ -33,10 +36,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount routers
-app.include_router(seo.router, prefix="/api/search", tags=["SEO"])
-app.include_router(ai.router, prefix="/api/search", tags=["AI"])
-app.include_router(community.router, prefix="/api/search", tags=["Community"])
+# Mount routers - Protected search routes with verify_token dependencies
+app.include_router(seo.router, prefix="/api/search", tags=["SEO"], dependencies=[Depends(verify_token)])
+app.include_router(ai.router, prefix="/api/search", tags=["AI"], dependencies=[Depends(verify_token)])
+app.include_router(community.router, prefix="/api/search", tags=["Community"], dependencies=[Depends(verify_token)])
+
+# Context router already enforces its own inner dependencies or mounts under context directly
 app.include_router(context.router, prefix="/api", tags=["Context"])
 app.include_router(pages.router, prefix="/api", tags=["Pages"])
 

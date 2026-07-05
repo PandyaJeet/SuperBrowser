@@ -588,6 +588,27 @@ function registerIpcHandlers() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: sessionId, tab_id: tabId, results })
     });
+    // --- Secure Search IPC Handlers ---
+  ipcMain.handle("search:seo", async (_, { q, sessionId, persona, gl }) => {
+    const params = new URLSearchParams({ q, session_id: sessionId || "", persona: persona || "default", gl: gl || "us" });
+    const res = await fetchContext(`/api/search/seo?${params.toString()}`);
+    if (!res.ok) throw new Error(`SEO Search failed: ${res.status}`);
+    return res.json();
+  });
+
+  ipcMain.handle("search:ai", async (_, { q, sessionId, persona, gl }) => {
+    const params = new URLSearchParams({ q, session_id: sessionId || "", persona: persona || "default", gl: gl || "us" });
+    const res = await fetchContext(`/api/search/ai?${params.toString()}`);
+    if (!res.ok) throw new Error(`AI Search failed: ${res.status}`);
+    return res.json();
+  });
+
+  ipcMain.handle("search:community", async (_, { q, sessionId, persona, gl }) => {
+    const params = new URLSearchParams({ q, session_id: sessionId || "", persona: persona || "default", gl: gl || "us" });
+    const res = await fetchContext(`/api/search/community?${params.toString()}`);
+    if (!res.ok) throw new Error(`Community Search failed: ${res.status}`);
+    return res.json();
+  });
     if (!res.ok) throw new Error(`Failed to add results: ${res.status}`);
     return res.json();
   });

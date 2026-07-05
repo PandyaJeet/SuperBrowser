@@ -402,46 +402,21 @@ export default function App() {
     return () => { window.removeEventListener("beforeunload", stopSession); stopSession() }
   }, [appSessionId, contextManager, isIncognito])
 
-  const updateTab = useCallback((tabId, updates) => {
+const updateTab = useCallback((tabId, updates) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t))
   }, [])
 
-  const recordHistoryItem = useCallback((item) => {
-    if (isIncognito || !item) return
-    const normalized = {
-      ...item,
-      id: item.id || crypto.randomUUID(),
-      time: item.time || new Date().toISOString()
-    }
-    const keyFor = (entry) => entry.type === "page"
-      ? `page:${entry.url}`
-      : `search:${entry.mode}:${entry.query}`
-    const nextKey = keyFor(normalized)
-
-    setBrowserHistory(current => {
-      const next = [normalized, ...current.filter(entry => keyFor(entry) !== nextKey)].slice(0, 100)
-      writeWebHistory(next)
-      return next
-    })
-  }, [isIncognito])
-
+  // Refactored clean search signature utilizing strict Electron IPC Tunneling
   const performSearch = useCallback((tabId, tabData, searchPersona = "default") => {
-    const endpoints = { seo: `/api/search/seo`, ai: `/api/search/ai`, community: `/api/search/community` }
     const prev = searchControllersRef.current[tabId]
     if (prev) prev.abort()
     const controller = new AbortController()
     searchControllersRef.current[tabId] = controller
-
+    
     const onSuccess = (data) => {
-      const normalizedData = tabData.activeMode === 'seo' && (!Array.isArray(data?.results) || data.results.length === 0)
-        ? createInstantSearchResults(tabData.query)
-        : tabData.activeMode === 'ai' && !data?.answer
-          ? createInstantAiResults(tabData.query, searchPersona)
-          : data
-      console.log(`[Search] Results received for tab ${tabId}:`, normalizedData)
-      setTabs(p => p.map(t => t.id === tabId ? { ...t, results: normalizedData, loading: false, error: null } : t))
-      if (!isIncognito && Array.isArray(normalizedData?.results) && normalizedData.results.length > 0) {
-        contextManager.addResults(tabId, tabData.sessionId, normalizedData.results)
+      setTabs(p => p.map(t => t.id === tabId ? { ...t, results: data, loading: false } : t))
+      if (Array.isArray(data?.results) && data.results.length > 0) {
+        contextManager.addResults(tabId, tabData.sessionId, data.results)
       }
     }
 
@@ -466,115 +441,62 @@ export default function App() {
       const errorMessage = error?.message || "Search failed. Please try again."
       setTabs(p => p.map(t => t.id === tabId ? { ...t, error: errorMessage, loading: false, results: null } : t))
     }
-
-    const onDone = () => {
-      if (searchControllersRef.current[tabId] === controller) {
-        delete searchControllersRef.current[tabId]
-      }
+    const onDone = () => { 
+      if (searchControllersRef.current[tabId] === controller) delete searchControllersRef.current[tabId] 
     }
+    
+    // Core Logic: Always check for Electron IPC Bridge availability first
+    const isElectron = Boolean(window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.search)
 
-    if (tabData.activeMode === 'ai') {
-      const context = contextManager.getAIContext(tabId)
-      const hasContext = context.queries.length > 0 || context.results.length > 0 || context.visited_pages.length > 0
-      if (hasContext) {
-        const url = `${API_BASE}/api/search/ai/contextual`
-        const payload = { query: tabData.query, persona: searchPersona, context, region: userRegion }
-        console.log(`[Search] Making contextual AI request to ${url}`)
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify(payload)
-        })
-          .then(r => {
-            if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`)
-            return r.json()
-          })
-          .then(onSuccess)
-          .catch(onError)
-          .finally(onDone)
+    if (isElectron) {
+      const searchBridge = window.superBrowserDesktop.search
+      let bridgePromise
+
+      if (tabData.activeMode === 'seo') {
+        bridgePromise = searchBridge.seo(tabData.query, tabData.sessionId, searchPersona, userRegion)
+      } else if (tabData.activeMode === 'ai') {
+        bridgePromise = searchBridge.ai(tabData.query, tabData.sessionId, searchPersona, userRegion)
+      } else if (tabData.activeMode === 'community') {
+        bridgePromise = searchBridge.community(tabData.query, tabData.sessionId, searchPersona, userRegion)
+      }
+
+      if (bridgePromise) {
+        bridgePromise.then(onSuccess).catch(onError).finally(onDone)
         return
       }
     }
 
+    // Secure contextual block / web app view standard pipeline fallback
+    if (tabData.activeMode === 'ai') {
+      const context = contextManager.getAIContext(tabId)
+      if (context.queries.length > 0 || context.results.length > 0 || context.visited_pages.length > 0) {
+        fetch(`${API_BASE}/api/search/ai/contextual`, { 
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' }, 
+          signal: controller.signal, 
+          body: JSON.stringify({ query: tabData.query, persona: searchPersona, context, region: userRegion }) 
+        })
+          .then(r => r.json()).then(onSuccess).catch(onError).finally(onDone)
+        return
+      }
+    }
+
+    // Default target fallbacks outside native Electron runtime environment (e.g., standard browser view)
+    const endpoints = { seo: `/api/search/seo`, ai: `/api/search/ai`, community: `/api/search/community` }
     let url = `${API_BASE}${endpoints[tabData.activeMode]}?q=${encodeURIComponent(tabData.query)}&session_id=${tabData.sessionId}&gl=${userRegion}`
     if (tabData.activeMode === 'ai') url += `&persona=${searchPersona}`
-    const cacheKey = [
-      'v5',
-      tabData.activeMode,
-      searchPersona,
-      userRegion,
-      tabData.query.trim().toLowerCase()
-    ].join(':')
-    const cached = searchCacheRef.current[cacheKey]
-    if (cached && Date.now() - cached.ts < 5 * 60 * 1000) {
-      onSuccess(cached.data)
-      onDone()
-      return
-    }
-    console.log(`[Search] Making ${tabData.activeMode} request to ${url}`)
-    fetch(url, { signal: controller.signal })
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`)
-        return r.json()
-      })
-      .then(data => {
-        const hasResults = Array.isArray(data?.results) ? data.results.length > 0 : Boolean(data?.answer || data?.insights)
-        if (hasResults) searchCacheRef.current[cacheKey] = { data, ts: Date.now() }
-        onSuccess(data)
-      })
-      .catch(onError)
-      .finally(onDone)
-  }, [contextManager, userRegion, isIncognito])
+    
+    fetch(url, { signal: controller.signal }).then(r => r.json()).then(onSuccess).catch(onError).finally(onDone)
+  }, [contextManager, userRegion])
 
+  // Map handleSearch to performSearch to eliminate execution anomalies across the JSX elements
   const handleSearch = useCallback((tabId, searchPersona = "default") => {
-    setTabs(currentTabs => {
-      const tab = currentTabs.find(t => t.id === tabId)
-      if (!tab?.query.trim()) {
-        console.warn(`[Search] Empty query for tab ${tabId}`)
-        return currentTabs
-      }
-      console.log(`[Search] Starting search on tab ${tabId}:`, { query: tab.query, mode: tab.activeMode, persona: searchPersona })
-      if (!isIncognito) {
-        contextManager.addQuery(tabId, tab.sessionId, tab.query, tab.activeMode)
-        recordHistoryItem({
-          type: "search",
-          query: tab.query,
-          mode: tab.activeMode,
-          title: tab.query
-        })
-      }
-      performSearch(tabId, tab, searchPersona)
-      return currentTabs.map(t => {
-        if (t.id !== tabId) return t
-        const instantSeoResults = t.activeMode === 'seo' ? createInstantSearchResults(t.query) : null
-        const updatedTab = {
-          ...t,
-          loading: t.activeMode !== 'seo',
-          error: null,
-          results: instantSeoResults || t.results,
-          title: t.query.slice(0, 25),
-          history: isIncognito ? [] : [...t.history, { query: t.query, mode: t.activeMode }].slice(-10)
-        }
-        console.log(`[Search] Tab ${tabId} updated to loading state`)
-        return updatedTab
-      })
-    })
-  }, [performSearch, contextManager, isIncognito, recordHistoryItem])
-
-  const handleModeChange = useCallback((mode) => {
-    setTabs(currentTabs => {
-      const tab = currentTabs.find(t => t.id === activeTabId)
-      if (!tab) return currentTabs
-      const shouldSearch = tab.query && tab.results
-      const updatedTab = { ...tab, activeMode: mode }
-      if (shouldSearch) {
-        performSearch(activeTabId, updatedTab, persona)
-        return currentTabs.map(t => { if (t.id !== activeTabId) return t; return { ...updatedTab, loading: true, error: null, history: [...t.history, { query: t.query, mode }].slice(-10) } })
-      }
-      return currentTabs.map(t => t.id === activeTabId ? updatedTab : t)
-    })
-  }, [activeTabId, performSearch, persona])
+    const targetTab = tabs.find(t => t.id === tabId)
+    if (!targetTab || !targetTab.query?.trim()) return
+    
+    setTabs(p => p.map(t => t.id === tabId ? { ...t, loading: true, error: null } : t))
+    performSearch(tabId, targetTab, searchPersona)
+  }, [tabs, performSearch])
 
   const createAndActivateNewTab = useCallback(() => {
     setTabState(current => {
@@ -2066,11 +1988,10 @@ function SEOResults({ results, onOpenLink, query = "" }) {
   )
 }
 
-function AIResults({ results, onOpenLink }) {
-  const answer = results?.answer || ''
+function AIResults({ results }) {
+  const answer = results?.answer || results?.response || ''
   const isLiveData = results?.live_data === true
-  const sourceCount = results?.sources_scraped || results?.sources?.length || 0
-  const sources = Array.isArray(results?.sources) ? results.sources : []
+  const sourceCount = results?.sources_scraped || 0
   return (
     <div className="max-w-3xl space-y-6 animate-fade-in-up">
       {answer ? (
