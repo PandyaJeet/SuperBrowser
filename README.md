@@ -327,3 +327,4 @@ This project is open source and available under the MIT License.
   <p>Made with ❤️ using React, FastAPI, and AI</p>
   <p>⭐ Star this repo if you find it useful!</p>
 </div>
+# TODO: [feature] - improve navbar responsiveness across all devices  (#123)
