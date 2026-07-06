@@ -35,7 +35,7 @@ SuperBrowser pairs a **multi-engine search aggregator** with a **context-aware A
 
 ---
 
-## 📋 Table of Contents
+## 📋 Table of Contents :
 
 - [Why SuperBrowser?](#-why-superbrowser)
 - [Features](#-features)
