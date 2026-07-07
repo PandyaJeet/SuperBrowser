@@ -5,7 +5,10 @@ Context API Router - Handles context tracking, session lifecycle, chat, and expo
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Body
+import secrets
+
+from fastapi import APIRouter, Body, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from services.groq_service import ask_groq
@@ -23,6 +26,23 @@ _session_store: Dict[str, Dict[str, Optional[str]]] = {}
 # Chat history storage
 # Structure: {session_id: [{"role": "user/assistant", "content": "..."}]}
 _chat_history: Dict[str, List[Dict[str, str]]] = {}
+
+# --- Size limits for in-memory stores ---
+MAX_SESSIONS = 100
+MAX_QUERIES_PER_TAB = 20
+MAX_RESULTS_PER_TAB = 50
+MAX_VISITED_PER_TAB = 20
+MAX_CHAT_MESSAGES = 20
+
+
+def _enforce_session_limit() -> None:
+    """Evict oldest sessions when limit is exceeded."""
+    while len(_session_store) > MAX_SESSIONS:
+        oldest = min(_session_store.keys(),
+                     key=lambda sid: _session_store[sid].get("started_at", "") or "")
+        _session_store.pop(oldest, None)
+        _context_store.pop(oldest, None)
+        _chat_history.pop(oldest, None)
 
 
 def _utc_now_iso() -> str:
@@ -108,8 +128,12 @@ class ContextUpdate(BaseModel):
 @router.post("/context/session/start")
 async def start_session(session_id: str = Body(..., embed=True)):
     """Start (or resume) a context session."""
+    _enforce_session_limit()
     _ensure_session(session_id)
     session = _session_store[session_id]
+
+    if not session.get("token"):
+        session["token"] = secrets.token_urlsafe(32)
 
     if session.get("status") != "active":
         session["status"] = "active"
@@ -117,7 +141,8 @@ async def start_session(session_id: str = Body(..., embed=True)):
 
     return {
         "status": "success",
-        "session": session,
+        "session": {k: v for k, v in session.items() if k != "token"},
+        "token": session["token"],
         "stats": _session_stats(session_id),
     }
 
@@ -152,8 +177,9 @@ async def stop_session(session_id: str):
 
 
 @router.get("/context/export/{session_id}")
-async def export_session_context(session_id: str):
-    """Export all context for a session as JSON payload."""
+async def export_session_context(session_id: str, token: str = Query(default=None)):
+    """Export all context for a session as JSON payload.
+    Requires a valid session token for access control."""
     if session_id not in _session_store and session_id not in _context_store:
         return {
             "status": "not_found",
@@ -167,6 +193,13 @@ async def export_session_context(session_id: str):
                 "visited_count": 0,
             },
         }
+
+    session = _session_store.get(session_id, {})
+    if session.get("token") and session["token"] != token:
+        return JSONResponse(
+            status_code=403,
+            content={"error": "Access denied: invalid session token"}
+        )
 
     _ensure_session(session_id)
     return {
@@ -272,7 +305,7 @@ async def add_query_to_context(
     tab_context = _ensure_tab_context(session_id, tab_id)
 
     tab_context["queries"].append(query)
-    tab_context["queries"] = tab_context["queries"][-20:]
+    tab_context["queries"] = tab_context["queries"][-MAX_QUERIES_PER_TAB:]
 
     return {"status": "success", "message": "Query added to context", "mode": mode}
 
@@ -285,7 +318,7 @@ async def add_results_to_context(
 ):
     """Add search results to tab context."""
     tab_context = _ensure_tab_context(session_id, tab_id)
-    tab_context["results"] = [r.dict() for r in results][-50:]
+    tab_context["results"] = [r.dict() for r in results][-MAX_RESULTS_PER_TAB:]
 
     return {"status": "success", "message": "Results added to context"}
 
@@ -300,7 +333,7 @@ async def add_visited_page_to_context(
     tab_context = _ensure_tab_context(session_id, tab_id)
 
     tab_context["visited_pages"].append(page.dict())
-    tab_context["visited_pages"] = tab_context["visited_pages"][-20:]
+    tab_context["visited_pages"] = tab_context["visited_pages"][-MAX_VISITED_PER_TAB:]
 
     return {"status": "success", "message": "Visited page added to context"}
 
@@ -409,9 +442,9 @@ Please respond to the user's message, taking into account the conversation histo
     # Add assistant response to history
     _chat_history[session_id].append({"role": "assistant", "content": response})
     
-    # Keep history limited to last 20 messages
-    if len(_chat_history[session_id]) > 20:
-        _chat_history[session_id] = _chat_history[session_id][-20:]
+    # Keep history limited to max messages
+    if len(_chat_history[session_id]) > MAX_CHAT_MESSAGES:
+        _chat_history[session_id] = _chat_history[session_id][-MAX_CHAT_MESSAGES:]
     
     return {
         "status": "success",
