@@ -6,6 +6,8 @@ const LazyCommunityResults = lazy(() => import('./components/CommunityResults'))
 const LazyBackgroundOrb = lazy(() => import('./components/BackgroundOrb'))
 import { AiInput } from './components/AiInput'
 import { ProductCarousel } from './components/ProductCarousel'
+import ShieldsPanel from './components/ShieldsPanel'
+
 
 const PERSONAS = [
   { id: "default", label: "Default", desc: "Raw Groq" },
@@ -2419,10 +2421,11 @@ function BrowserPanel({ url, title, onClose }) {
   return (
     <div className="h-full flex flex-col bg-white animate-fade-in-up">
       <div className="no-print px-4 py-2 border-b border-[var(--border-color)] flex items-center gap-3">
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 relative">
           <button onClick={onClose} className="p-1.5 rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Back"><ChevronLeftIcon /></button>
           <button disabled className="p-1.5 rounded-full text-[var(--text-secondary)] opacity-30 cursor-not-allowed transition-colors" title="Forward"><ChevronRightIcon /></button>
           <button onClick={reloadPage} className="p-1.5 rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Reload"><RefreshIcon /></button>
+          <ShieldsPanel url={url} webviewRef={webviewRef} />
         </div>
         <input value={url} readOnly className="flex-1 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-sm rounded-lg px-3 py-1.5 outline-none text-[var(--text-secondary)]" />
       </div>
@@ -2439,9 +2442,11 @@ function BrowserPanel({ url, title, onClose }) {
           data-active-browser-view="true"
           id={`webview-${url}`}
           src={url}
+          partition="persist:superbrowser"
+          preload={window.superBrowserDesktop?.webviewPreloadPath}
           className="w-full flex-1"
           style={{ minHeight: 0 }}
-          allowpopups="true"
+          /* SEC-02: allowpopups removed; popups are blocked at process level in main.cjs */
         />
       ) : (
         <iframe
