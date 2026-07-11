@@ -8,7 +8,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Annotated
 import uuid
-
+from utils.context_persistence import save_context, delete_context
 from fastapi import APIRouter, Body
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Body, Header, HTTPException, Depends
@@ -419,7 +419,9 @@ async def clear_session_context(session_id: str):
     except Exception as e:
         # Prevents an error from crashing the response if a session didn't have active chats
         print(f"Database clean up note: {e}")
-        
+
+    delete_context(session_id)
+
     return {"status": "success", "message": "Entire workspace and AI context wiped successfully"}
 
 
@@ -439,6 +441,8 @@ async def add_query_to_context(
     tab_context = _ensure_tab_context(session_id, tab_id)
     tab_context["queries"].append(query)
     tab_context["queries"] = tab_context["queries"][-20:]
+
+    save_context(session_id , tab_id , tab_context)
     return {"status": "success", "message": "Query added to context", "mode": mode}
 
 
@@ -455,6 +459,7 @@ async def add_results_to_context(
 ):
     tab_context = _ensure_tab_context(session_id, tab_id)
     tab_context["results"] = [r.dict() for r in results][-50:]
+    save_context(session_id, tab_id, tab_context)
     return {"status": "success", "message": "Results added to context"}
 
 
@@ -472,6 +477,7 @@ async def add_visited_page_to_context(
     tab_context = _ensure_tab_context(session_id, tab_id)
     tab_context["visited_pages"].append(page.dict())
     tab_context["visited_pages"] = tab_context["visited_pages"][-20:]
+    save_context(session_id, tab_id, tab_context)
     return {"status": "success", "message": "Visited page added to context"}
 
 
