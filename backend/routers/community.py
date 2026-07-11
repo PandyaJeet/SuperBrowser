@@ -5,6 +5,7 @@ from typing import Optional, List
 
 from services.community_summarizer import get_community_insights
 from utils.cache import cache_key, get_cached, set_cached
+from utils.sanitize import sanitize_query
 
 router = APIRouter()
 
@@ -36,6 +37,7 @@ async def get_community(q: str = Query(default=None)):
             content={"error": "query param q is required"}
         )
 
+    q = sanitize_query(q)
     key = cache_key(q, "all", "community")
     cached = get_cached(key)
     if cached is not None:
