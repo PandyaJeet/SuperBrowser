@@ -18,14 +18,13 @@ from services.groq_service import ask_groq
 from database import get_context_db
 from services.personas import get_persona
 
-VALID_TOKEN = os.environ.get("SUPERBROWSER_SESSION_TOKEN", secrets.token_urlsafe(32))
+VALID_TOKEN = os.environ.get("SUPERBROWSER_SESSION_TOKEN", "")
 
 def verify_token(x_session_token: str = Header(default="")):
-    # Skip verification in development mode
-    if os.environ.get("IS_DEVELOPMENT") == "true":
-        return
+    if not VALID_TOKEN:
+        raise HTTPException(status_code=500, detail="Server authentication not configured")
 
-    if not VALID_TOKEN or not secrets.compare_digest(x_session_token, VALID_TOKEN):
+    if not secrets.compare_digest(x_session_token, VALID_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
