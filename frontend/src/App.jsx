@@ -1,10 +1,9 @@
 import { Suspense, lazy, useState, useCallback, useEffect, useRef } from 'react'
-import { useContextManager } from './useContextManager'
+import { clearEntireSessionWorkspace, useContextManager } from './useContextManager'
 import { getApiBase } from './config/apiBase'
 
 const LazyCommunityResults = lazy(() => import('./components/CommunityResults'))
 const LazyBackgroundOrb = lazy(() => import('./components/BackgroundOrb'))
-import { ContinuousPaginationDemo } from './components/ContinuousPagination'
 import { AiInput } from './components/AiInput'
 import { ProductCarousel } from './components/ProductCarousel'
 import ShieldsPanel from './components/ShieldsPanel'
@@ -20,8 +19,178 @@ const PERSONAS = [
 
 const API_BASE = getApiBase()
 const THEME_STORAGE_KEY = 'super-browser-theme'
+const WEB_DOWNLOADS_STORAGE_KEY = 'superbrowser-web-downloads'
+const WEB_HISTORY_STORAGE_KEY = 'superbrowser-web-history'
+const BOOKMARKS_STORAGE_KEY = 'super-browser-bookmarks'
+
+function isIncognitoRuntime() {
+  if (window.superBrowserDesktop?.isIncognito) return true
+  try {
+    const url = new URL(window.location.href)
+    return url.searchParams.get('incognito') === '1'
+  } catch {
+    return false
+  }
+}
+
+function createWebIncognitoUrl() {
+  const url = new URL(window.location.href)
+  url.searchParams.set('incognito', '1')
+  return url.toString()
+}
+
+function readWebDownloads() {
+  try {
+    const storage = isIncognitoRuntime() ? window.sessionStorage : window.localStorage
+    const parsed = JSON.parse(storage.getItem(WEB_DOWNLOADS_STORAGE_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function writeWebDownloads(items) {
+  try {
+    const storage = isIncognitoRuntime() ? window.sessionStorage : window.localStorage
+    storage.setItem(WEB_DOWNLOADS_STORAGE_KEY, JSON.stringify(items))
+  } catch { }
+}
+
+function readWebHistory() {
+  try {
+    if (isIncognitoRuntime()) return []
+    const parsed = JSON.parse(window.localStorage.getItem(WEB_HISTORY_STORAGE_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function writeWebHistory(items) {
+  try {
+    if (isIncognitoRuntime()) return
+    window.localStorage.setItem(WEB_HISTORY_STORAGE_KEY, JSON.stringify(items))
+  } catch { }
+}
+
+function readBookmarks() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(BOOKMARKS_STORAGE_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function writeBookmarks(items) {
+  try {
+    window.localStorage.setItem(BOOKMARKS_STORAGE_KEY, JSON.stringify(items))
+  } catch { }
+}
+
+function createInstantSearchResults(query) {
+  const cleanQuery = query?.trim().replace(/\s+/g, " ") || "search"
+  const slug = cleanQuery.replace(/\s+/g, "_")
+  const encoded = encodeURIComponent(cleanQuery)
+  const siteSearch = (baseUrl, param) => `${baseUrl}?${param}=${encoded}`
+  const result = (title, url, snippet, source = "instant") => ({ title, url, snippet, source })
+  const knownTopicResults = {
+    artificial: [
+      result("Artificial intelligence - Wikipedia", "https://en.wikipedia.org/wiki/Artificial_intelligence", "Overview of artificial intelligence, its history, techniques, and applications."),
+      result("Artificial intelligence - Britannica", "https://www.britannica.com/technology/artificial-intelligence", "Encyclopedia overview of AI concepts and development."),
+      result("What is artificial intelligence? - IBM", "https://www.ibm.com/think/topics/artificial-intelligence", "Plain-language explanation of AI, machine learning, and enterprise uses."),
+      result("What is AI? - Google Cloud", "https://cloud.google.com/learn/what-is-artificial-intelligence", "Google Cloud guide to AI concepts, models, and business use cases."),
+      result("What is Artificial Intelligence? - AWS", "https://aws.amazon.com/what-is/artificial-intelligence/", "AWS overview of AI technologies and common implementation patterns."),
+      result("AI Index Report - Stanford HAI", "https://aiindex.stanford.edu/report/", "Research-backed annual reports tracking AI trends, industry, and policy."),
+      result("Machine learning - Wikipedia", "https://en.wikipedia.org/wiki/Machine_learning", "Related field covering algorithms that learn patterns from data."),
+      result("Deep learning - Wikipedia", "https://en.wikipedia.org/wiki/Deep_learning", "Neural-network based methods used in modern AI systems."),
+      result("Artificial Intelligence courses - Coursera", "https://www.coursera.org/search?query=artificial%20intelligence", "Courses and learning paths for AI foundations and applications."),
+      result("Artificial Intelligence - Microsoft Azure", "https://azure.microsoft.com/en-us/resources/cloud-computing-dictionary/artificial-intelligence", "Microsoft explanation of AI in cloud and application development."),
+      result("Artificial intelligence - NVIDIA", "https://www.nvidia.com/en-us/glossary/artificial-intelligence/", "Hardware and accelerated-computing view of AI workloads."),
+      result("AI articles - MIT News", "https://news.mit.edu/topic/artificial-intelligence2", "Research news and explainers about artificial intelligence.")
+    ],
+    "machine learning": [
+      result("Machine learning - Wikipedia", "https://en.wikipedia.org/wiki/Machine_learning", "Overview of machine learning algorithms, history, and applications."),
+      result("What is machine learning? - IBM", "https://www.ibm.com/think/topics/machine-learning", "Explanation of supervised, unsupervised, and reinforcement learning."),
+      result("Machine Learning Crash Course - Google", "https://developers.google.com/machine-learning/crash-course", "Hands-on Google course for machine learning basics."),
+      result("Machine learning - AWS", "https://aws.amazon.com/what-is/machine-learning/", "Cloud-focused overview of machine learning systems."),
+      result("Machine learning - Stanford Online", "https://online.stanford.edu/courses/sohs-ystatslearning-statistical-learning", "Learning resource connected to statistical learning concepts.")
+    ],
+    python: [
+      result("Python programming language - Official site", "https://www.python.org/", "Official Python website with downloads, docs, and news."),
+      result("Python documentation", "https://docs.python.org/3/", "Official Python 3 documentation and library reference."),
+      result("Python tutorial", "https://docs.python.org/3/tutorial/", "Official beginner-friendly Python tutorial."),
+      result("Python - Wikipedia", "https://en.wikipedia.org/wiki/Python_(programming_language)", "Overview of Python history, design, and ecosystem."),
+      result("Real Python", "https://realpython.com/", "Python tutorials, examples, and practical guides.")
+    ],
+    react: [
+      result("React official docs", "https://react.dev/", "Official React documentation, tutorials, and API references."),
+      result("React Learn", "https://react.dev/learn", "Official learning path for components, state, and hooks."),
+      result("React - Wikipedia", "https://en.wikipedia.org/wiki/React_(software)", "Overview of the React JavaScript library."),
+      result("React GitHub repository", "https://github.com/facebook/react", "Source code and issues for React."),
+      result("React package - npm", "https://www.npmjs.com/package/react", "React package metadata and versions on npm.")
+    ],
+    electron: [
+      result("Electron official site", "https://www.electronjs.org/", "Official Electron framework site."),
+      result("Electron documentation", "https://www.electronjs.org/docs/latest/", "Official Electron API and guide documentation."),
+      result("Electron - GitHub", "https://github.com/electron/electron", "Electron source code, releases, and issues."),
+      result("Electron - Wikipedia", "https://en.wikipedia.org/wiki/Electron_(software_framework)", "Overview of the Electron desktop application framework."),
+      result("Electron Forge", "https://www.electronforge.io/", "Tooling for packaging and publishing Electron apps.")
+    ]
+  }
+  knownTopicResults.ai = knownTopicResults.artificial
+  knownTopicResults["artificial intelligence"] = knownTopicResults.artificial
+
+  const genericResults = [
+    result(`${cleanQuery} - Wikipedia`, `https://en.wikipedia.org/wiki/${slug}`, `Open the main Wikipedia page for ${cleanQuery}.`),
+    result(`Wikipedia search for ${cleanQuery}`, siteSearch("https://en.wikipedia.org/w/index.php", "search"), `Browse matching Wikipedia pages for ${cleanQuery}.`),
+    result(`Britannica search for ${cleanQuery}`, siteSearch("https://www.britannica.com/search", "query"), `Browse encyclopedia results for ${cleanQuery}.`),
+    result(`Internet Archive search for ${cleanQuery}`, siteSearch("https://archive.org/search", "query"), `Find archived pages, books, and media for ${cleanQuery}.`),
+    result(`GitHub search for ${cleanQuery}`, siteSearch("https://github.com/search", "q"), `Find repositories and code related to ${cleanQuery}.`),
+    result(`Stack Overflow search for ${cleanQuery}`, siteSearch("https://stackoverflow.com/search", "q"), `Find developer questions and answers for ${cleanQuery}.`),
+    result(`MDN search for ${cleanQuery}`, siteSearch("https://developer.mozilla.org/en-US/search", "q"), `Search MDN documentation for ${cleanQuery}.`),
+    result(`Coursera search for ${cleanQuery}`, siteSearch("https://www.coursera.org/search", "query"), `Find courses and learning paths for ${cleanQuery}.`),
+    result(`MIT News search for ${cleanQuery}`, siteSearch("https://news.mit.edu/search", "keyword"), `Find research news related to ${cleanQuery}.`),
+    result(`YouTube search for ${cleanQuery}`, siteSearch("https://www.youtube.com/results", "search_query"), `Find videos about ${cleanQuery}.`),
+    result(`Reddit search for ${cleanQuery}`, siteSearch("https://www.reddit.com/search/", "q"), `Find community discussions about ${cleanQuery}.`),
+    result(`Google Scholar search for ${cleanQuery}`, siteSearch("https://scholar.google.com/scholar", "q"), `Find scholarly results for ${cleanQuery}.`)
+  ]
+
+  const seenUrls = new Set()
+  const results = [...(knownTopicResults[cleanQuery.toLowerCase()] || []), ...genericResults]
+    .filter(item => {
+      if (!item.url || seenUrls.has(item.url)) return false
+      seenUrls.add(item.url)
+      return true
+    })
+    .slice(0, 12)
+
+  return { results, shopping_results: [] }
+}
+
+function createInstantAiResults(query, persona = "default") {
+  const searchResults = createInstantSearchResults(query).results.slice(0, 8)
+  return {
+    query,
+    answer: [
+      `Here are fast SuperBrowser results for "${query || "search"}".`,
+      "Live AI synthesis is unavailable or still loading, so this answer is grounded in the sources below.",
+      "",
+      "Top places to start:",
+      ...searchResults.slice(0, 5).map(item => `- ${item.title}: ${item.url}`),
+      "",
+      "Open any result to continue browsing inside SuperBrowser."
+    ].join("\n"),
+    sources: searchResults,
+    persona,
+    live_data: false,
+    sources_scraped: searchResults.length,
+    status: "fallback"
+  }
+}
 
 function getInitialTheme() {
+  if (isIncognitoRuntime()) return 'dark'
   try {
     const stored = localStorage.getItem(THEME_STORAGE_KEY)
     if (stored === 'dark' || stored === 'light') return stored
@@ -36,11 +205,11 @@ const SunIcon = () => (
     <line x1="12" y1="1" x2="12" y2="3" />
     <line x1="12" y1="21" x2="12" y2="23" />
     <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+    <line x1="18.36" y1="4.22" x2="19.78" y2="5.64" />
     <line x1="1" y1="12" x2="3" y2="12" />
     <line x1="21" y1="12" x2="23" y2="12" />
     <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+    <line x1="18.36" y1="19.78" x2="19.78" y2="18.36" />
   </svg>
 )
 
@@ -54,6 +223,7 @@ function createNewTab(sessionId = null) {
   return {
     id: crypto.randomUUID(),
     title: "New Tab",
+    tabNumber: 1,
     query: "",
     activeMode: "seo",
     results: null,
@@ -63,10 +233,41 @@ function createNewTab(sessionId = null) {
     history: [],
     browserUrl: "",
     browserTitle: "",
-    showChat: false,
-    selectedModel: "default",
-    lastQuery: ""
+    createdAt: Date.now()
+  }
+}
 
+function getNextTabNumber(tabs) {
+  return Math.max(0, ...tabs.map(tab => Number(tab.tabNumber) || 0)) + 1
+}
+
+function createInitialTabState(appSessionId) {
+  const initialTab = {
+    ...createNewTab(appSessionId),
+    tabNumber: 1,
+    title: "New Tab"
+  }
+
+  return {
+    tabs: [initialTab],
+    activeTabId: initialTab.id
+  }
+}
+
+function normalizeTabState(state, appSessionId) {
+  const tabs = Array.isArray(state?.tabs) ? state.tabs.filter(Boolean) : []
+  if (tabs.length === 0) {
+    return createInitialTabState(appSessionId)
+  }
+
+  const activeTabId = tabs.some(tab => tab.id === state.activeTabId)
+    ? state.activeTabId
+    : tabs[tabs.length - 1].id
+
+  return {
+    ...state,
+    tabs,
+    activeTabId
   }
 }
 
@@ -103,20 +304,38 @@ export default function App() {
   const [appSessionId] = useState(() => crypto.randomUUID())
   const [sessionStartedAt] = useState(() => new Date().toISOString())
   const [sessionStatus, setSessionStatus] = useState("starting")
-  const [tabsState] = useState(() => {
-    const initialTab = createNewTab()
-    return { tabs: [initialTab], activeId: initialTab.id }
-  })
 
   const searchInputHomeRef = useRef(null)
   const searchInputHeaderRef = useRef(null)
+  const [tabState, setTabState] = useState(() => createInitialTabState(appSessionId))
 
-  const [tabs, setTabs] = useState(tabsState.tabs)
-  const [activeTabId, setActiveTabId] = useState(tabsState.activeId)
+  const tabs = tabState.tabs
+  const activeTabId = tabState.activeTabId
+  const setTabs = useCallback((updater) => {
+    setTabState(current => {
+      return normalizeTabState({
+        ...current,
+        tabs: typeof updater === 'function' ? updater(current.tabs) : updater
+      }, appSessionId)
+    })
+  }, [appSessionId])
+
+  const setActiveTabId = useCallback((updater) => {
+    setTabState(current => {
+      return normalizeTabState({
+        ...current,
+        activeTabId: typeof updater === 'function' ? updater(current.activeTabId) : updater
+      }, appSessionId)
+    })
+  }, [appSessionId])
   const [showHistory, setShowHistory] = useState(false)
+  const [browserHistory, setBrowserHistory] = useState(() => readWebHistory())
   const [showPricing, setShowPricing] = useState(false)
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false)
-
+  const [showFindBox, setShowFindBox] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [placeholderModal, setPlaceholderModal] = useState(null)
+  const [persona, setPersona] = useState("default")
   const [showContextInfo, setShowContextInfo] = useState(false)
   const [backendStatus, setBackendStatus] = useState(null)
   const [userRegion] = useState(() => {
@@ -128,15 +347,22 @@ export default function App() {
   })
 
   const searchControllersRef = useRef({})
+  const searchCacheRef = useRef({})
   const contextManager = useContextManager()
+  // Phase 6: Extract loadContext and contextRestored from the hook
+  const { loadContext, contextRestored } = contextManager
   const activeTab = tabs.find(t => t.id === activeTabId)
+  const isIncognito = isIncognitoRuntime()
 
   const isBrowserTab = Boolean(activeTab?.browserUrl)
-  const isNewTab = !activeTab?.results && !activeTab?.loading && !activeTab?.error && !isBrowserTab
+  const isDownloadsTab = activeTab?.tabType === "downloads"
+  const isBookmarksTab = activeTab?.tabType === "bookmarks"
+  const isNewTab = !activeTab?.tabType && !activeTab?.results && !activeTab?.loading && !activeTab?.error && !isBrowserTab
 
   const toggleTheme = useCallback(() => {
+    if (isIncognito) return
     setTheme(current => current === 'dark' ? 'light' : 'dark')
-  }, [])
+  }, [isIncognito])
 
   useEffect(() => {
     if (!window.superBrowserDesktop?.isElectron || !window.superBrowserDesktop?.backend?.getStatus) return
@@ -144,154 +370,481 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme
+    document.documentElement.dataset.theme = isIncognito ? 'dark' : theme
+    document.documentElement.dataset.incognito = isIncognito ? 'true' : 'false'
     try {
+      if (isIncognito) return
       window.localStorage.setItem(THEME_STORAGE_KEY, theme)
     } catch { }
-  }, [theme])
+  }, [theme, isIncognito])
 
   useEffect(() => {
+    console.log(`[App] App initialized:`, {
+      activeTabId,
+      totalTabs: tabs.length,
+      firstTabId: tabs[0]?.id,
+      sessionId: appSessionId,
+      isNewTab: !tabs[0]?.results && !tabs[0]?.loading && !tabs[0]?.error && !tabs[0]?.browserUrl
+    })
+  }, [])
+
+  useEffect(() => {
+    if (isIncognito) {
+      setSessionStatus("incognito")
+      try {
+        window.sessionStorage.clear()
+      } catch { }
+      return
+    }
     contextManager.startSession(appSessionId)
       .then(() => setSessionStatus("active"))
       .catch(() => setSessionStatus("error"))
     const stopSession = () => {
       contextManager.stopSession(appSessionId, { keepalive: true }).catch(() => { })
-      setSessionStatus("stopped")
     }
     window.addEventListener("beforeunload", stopSession)
     return () => { window.removeEventListener("beforeunload", stopSession); stopSession() }
-  }, [appSessionId, contextManager])
+  }, [appSessionId, contextManager, isIncognito])
 
-  const updateTab = useCallback((tabId, updates) => {
+  // Phase 6: Load context when tab becomes active
+  useEffect(() => {
+    if (activeTab && activeTab.sessionId && activeTabId) {
+      loadContext(activeTabId, activeTab.sessionId)
+    }
+  }, [activeTabId, activeTab?.sessionId, loadContext])
+
+const updateTab = useCallback((tabId, updates) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t))
   }, [])
 
-  const performSearch = useCallback((tabId, tabData) => {
-    const endpoints = { seo: `/api/search/seo`, ai: `/api/search/ai`, community: `/api/search/community` }
+  // Refactored clean search signature utilizing strict Electron IPC Tunneling
+  const performSearch = useCallback((tabId, tabData, searchPersona = "default") => {
     const prev = searchControllersRef.current[tabId]
     if (prev) prev.abort()
     const controller = new AbortController()
     searchControllersRef.current[tabId] = controller
+    
     const onSuccess = (data) => {
       setTabs(p => p.map(t => t.id === tabId ? { ...t, results: data, loading: false } : t))
-      if (Array.isArray(data?.results) && data.results.length > 0) contextManager.addResults(tabId, tabData.sessionId, data.results)
+      if (Array.isArray(data?.results) && data.results.length > 0) {
+        contextManager.addResults(tabId, tabData.sessionId, data.results)
+      }
     }
-    const onError = (error) => {
-      if (error?.name === 'AbortError') return
-      setTabs(p => p.map(t => t.id === tabId ? { ...t, error: "Search failed. Please try again.", loading: false } : t))
-    }
-    const onDone = () => { if (searchControllersRef.current[tabId] === controller) delete searchControllersRef.current[tabId] }
-    
-    const selectedModel = tabData.selectedModel || "default"
 
+    const onError = (error) => {
+      if (error?.name === 'AbortError') {
+        console.log(`[Search] Request aborted for tab ${tabId}`)
+        return
+      }
+      console.error(`[Search] Error for tab ${tabId}:`, error)
+      if (tabData.activeMode === 'seo') {
+        const fallbackData = createInstantSearchResults(tabData.query)
+        setTabs(p => p.map(t => t.id === tabId ? { ...t, error: null, loading: false, results: fallbackData } : t))
+        if (!isIncognito) contextManager.addResults(tabId, tabData.sessionId, fallbackData.results)
+        return
+      }
+      if (tabData.activeMode === 'ai') {
+        const fallbackData = createInstantAiResults(tabData.query, searchPersona)
+        setTabs(p => p.map(t => t.id === tabId ? { ...t, error: null, loading: false, results: fallbackData } : t))
+        if (!isIncognito) contextManager.addResults(tabId, tabData.sessionId, fallbackData.sources || [])
+        return
+      }
+      const errorMessage = error?.message || "Search failed. Please try again."
+      setTabs(p => p.map(t => t.id === tabId ? { ...t, error: errorMessage, loading: false, results: null } : t))
+    }
+    const onDone = () => { 
+      if (searchControllersRef.current[tabId] === controller) delete searchControllersRef.current[tabId] 
+    }
+    
+    // Core Logic: Always check for Electron IPC Bridge availability first
+    const isElectron = Boolean(window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.search)
+
+    if (isElectron) {
+      const searchBridge = window.superBrowserDesktop.search
+      let bridgePromise
+
+      if (tabData.activeMode === 'seo') {
+        bridgePromise = searchBridge.seo(tabData.query, tabData.sessionId, searchPersona, userRegion)
+      } else if (tabData.activeMode === 'ai') {
+        bridgePromise = searchBridge.ai(tabData.query, tabData.sessionId, searchPersona, userRegion)
+      } else if (tabData.activeMode === 'community') {
+        bridgePromise = searchBridge.community(tabData.query, tabData.sessionId, searchPersona, userRegion)
+      }
+
+      if (bridgePromise) {
+        bridgePromise.then(onSuccess).catch(onError).finally(onDone)
+        return
+      }
+    }
+
+    // Secure contextual block / web app view standard pipeline fallback
     if (tabData.activeMode === 'ai') {
       const context = contextManager.getAIContext(tabId)
-      const hasContext = context.queries.length > 0 || context.results.length > 0 || context.visited_pages.length > 0
-      if (hasContext) {
+      if (context.queries.length > 0 || context.results.length > 0 || context.visited_pages.length > 0) {
         fetch(`${API_BASE}/api/search/ai/contextual`, { 
           method: 'POST', 
           headers: { 'Content-Type': 'application/json' }, 
           signal: controller.signal, 
-          body: JSON.stringify({ 
-            query: tabData.query, 
-            persona: selectedModel, 
-            context, 
-            region: userRegion,
-            model: "llama-3.1-8b-instant"
-          }) 
+          body: JSON.stringify({ query: tabData.query, persona: searchPersona, context, region: userRegion }) 
         })
           .then(r => r.json()).then(onSuccess).catch(onError).finally(onDone)
         return
       }
     }
+
+    // Default target fallbacks outside native Electron runtime environment (e.g., standard browser view)
+    const endpoints = { seo: `/api/search/seo`, ai: `/api/search/ai`, community: `/api/search/community` }
     let url = `${API_BASE}${endpoints[tabData.activeMode]}?q=${encodeURIComponent(tabData.query)}&session_id=${tabData.sessionId}&gl=${userRegion}`
-    if (tabData.activeMode === 'ai') url += `&persona=${selectedModel}&model=llama-3.1-8b-instant`
+    if (tabData.activeMode === 'ai') url += `&persona=${searchPersona}`
+    
     fetch(url, { signal: controller.signal }).then(r => r.json()).then(onSuccess).catch(onError).finally(onDone)
   }, [contextManager, userRegion])
 
-  const handleSearch = useCallback((tabId) => {
-    setTabs(currentTabs => {
-      const tab = currentTabs.find(t => t.id === tabId)
-      if (!tab?.query.trim()) return currentTabs
-      contextManager.addQuery(tabId, tab.sessionId, tab.query, tab.activeMode)
-      performSearch(tabId, tab)
-      return currentTabs.map(t => {
-        if (t.id !== tabId) return t
-        return { 
-          ...t, 
-          loading: true, 
-          error: null, 
-          lastQuery: t.query, 
-          title: t.query.slice(0, 25), 
-          history: [...t.history, { query: t.query, mode: t.activeMode }].slice(-10) 
-        }
-      })
-    })
-  }, [performSearch, contextManager])
+  // Map handleSearch to performSearch to eliminate execution anomalies across the JSX elements
+  const handleSearch = useCallback((tabId, searchPersona = "default") => {
+    const targetTab = tabs.find(t => t.id === tabId)
+    if (!targetTab || !targetTab.query?.trim()) return
+    
+    setTabs(p => p.map(t => t.id === tabId ? { ...t, loading: true, error: null } : t))
+    performSearch(tabId, targetTab, searchPersona)
+  }, [tabs, performSearch])
 
-  const handleStop = useCallback((tabId) => {
-    const controller = searchControllersRef.current[tabId]
-    if (controller) {
-      controller.abort()
-      delete searchControllersRef.current[tabId]
+  const createAndActivateNewTab = useCallback(() => {
+    setTabState(current => {
+      const newTab = {
+        ...createNewTab(appSessionId),
+        tabNumber: getNextTabNumber(current.tabs),
+        title: "New Tab"
+      }
+
+      const next = {
+        ...current,
+        tabs: [...current.tabs, newTab],
+        activeTabId: newTab.id
+      }
+      console.log("[Tab] New tab created", {
+        tabId: newTab.id,
+        tabNumber: newTab.tabNumber,
+        totalTabs: next.tabs.length
+      })
+      return normalizeTabState(next, appSessionId)
+    })
+
+    setShowHistory(false)
+    setShowPricing(false)
+  }, [appSessionId])
+
+  useEffect(() => {
+    if (!window.superBrowserDesktop?.app?.onNewTab) return
+    return window.superBrowserDesktop.app.onNewTab(createAndActivateNewTab)
+  }, [createAndActivateNewTab])
+
+  const requestNewTab = useCallback(() => {
+    createAndActivateNewTab()
+  }, [createAndActivateNewTab])
+
+  const handleNewWindow = useCallback(() => {
+    if (window.superBrowserDesktop?.app?.newWindow) {
+      window.superBrowserDesktop.app.newWindow().catch(() => { })
+      return
     }
-    updateTab(tabId, { loading: false })
-  }, [updateTab])
+    window.open(window.location.href, '_blank', 'noopener,noreferrer')
+  }, [])
 
-  const handleRegenerate = useCallback((tabId) => {
-    setTabs(currentTabs => {
-      const tab = currentTabs.find(t => t.id === tabId)
-      if (!tab || !tab.lastQuery) return currentTabs
-      const updatedTab = { ...tab, query: tab.lastQuery }
-      performSearch(tabId, updatedTab)
-      return currentTabs.map(t => {
-        if (t.id !== tabId) return t
-        return { ...t, query: t.lastQuery, loading: true, error: null }
+  const handleNewIncognitoWindow = useCallback(() => {
+    if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.app?.newIncognitoWindow) {
+      window.superBrowserDesktop.app.newIncognitoWindow().catch(() => { })
+      return
+    }
+
+    const opened = window.open(createWebIncognitoUrl(), '_blank', 'noopener,noreferrer')
+    if (!opened) {
+      setPlaceholderModal({
+        title: "Incognito unavailable",
+        message: "Allow pop-ups for this site to open a new Incognito window."
       })
-    })
-  }, [performSearch])
+    }
+  }, [])
 
-  const handleModeChange = useCallback((mode) => {
-    setTabs(currentTabs => {
-      const tab = currentTabs.find(t => t.id === activeTabId)
-      if (!tab) return currentTabs
-      const shouldSearch = tab.query && tab.results
-      const updatedTab = { ...tab, activeMode: mode }
-      if (shouldSearch) {
-        performSearch(activeTabId, updatedTab)
-        return currentTabs.map(t => { if (t.id !== activeTabId) return t; return { ...updatedTab, loading: true, error: null, history: [...t.history, { query: t.query, mode }].slice(-10) } })
+  const openDownloadsTab = useCallback(() => {
+    setTabState(current => {
+      const existing = current.tabs.find(tab => tab.tabType === "downloads")
+      if (existing) {
+        return normalizeTabState({
+          ...current,
+          activeTabId: existing.id
+        }, appSessionId)
       }
-      return currentTabs.map(t => t.id === activeTabId ? updatedTab : t)
-    })
-  }, [activeTabId, performSearch])
 
-  function handleAddTab() {
-    const n = createNewTab(appSessionId)
-    setTabs(prevTabs => [...prevTabs, n])
-    setActiveTabId(n.id)
-  }
-
-  function handleCloseTab(tabId, e) {
-    if (e && e.stopPropagation) e.stopPropagation()
-    setTabs(prevTabs => {
-      if (prevTabs.length === 1) {
-        const r = createNewTab(appSessionId)
-        r.id = prevTabs[0].id
-        return [r]
+      const downloadsTab = {
+        ...createNewTab(appSessionId),
+        tabNumber: getNextTabNumber(current.tabs),
+        title: "Downloads",
+        tabType: "downloads",
+        query: "",
+        history: []
       }
-      const filtered = prevTabs.filter(t => t.id !== tabId)
 
-      setActiveTabId(currentActiveId => {
-        if (tabId === currentActiveId) {
-          const index = prevTabs.findIndex(t => t.id === tabId)
-          const fallbackIndex = Math.max(0, index - 1)
-          return filtered[fallbackIndex]?.id || null
+      return normalizeTabState({
+        ...current,
+        tabs: [...current.tabs, downloadsTab],
+        activeTabId: downloadsTab.id
+      }, appSessionId)
+    })
+
+    setShowHistory(false)
+    setShowPricing(false)
+  }, [appSessionId])
+
+  const openBookmarksTab = useCallback(() => {
+    setTabState(current => {
+      const existing = current.tabs.find(tab => tab.tabType === "bookmarks")
+      if (existing) {
+        return normalizeTabState({
+          ...current,
+          activeTabId: existing.id
+        }, appSessionId)
+      }
+
+      const bookmarksTab = {
+        ...createNewTab(appSessionId),
+        tabNumber: getNextTabNumber(current.tabs),
+        title: "Bookmarks",
+        tabType: "bookmarks",
+        query: "",
+        results: null,
+        loading: false,
+        error: null,
+        browserUrl: "",
+        browserTitle: "",
+        history: []
+      }
+
+      return normalizeTabState({
+        ...current,
+        tabs: [...current.tabs, bookmarksTab],
+        activeTabId: bookmarksTab.id
+      }, appSessionId)
+    })
+
+    setShowHistory(false)
+    setShowPricing(false)
+  }, [appSessionId])
+
+  const openBookmarkInNewTab = useCallback((bookmark) => {
+    if (!bookmark) return
+    setTabState(current => {
+      const bookmarkTab = {
+        ...createNewTab(appSessionId),
+        tabNumber: getNextTabNumber(current.tabs),
+        title: (bookmark.title || bookmark.url || bookmark.query || "Bookmark").slice(0, 25),
+        query: bookmark.url ? "" : (bookmark.query || bookmark.value || bookmark.title || ""),
+        results: null,
+        loading: false,
+        error: null,
+        browserUrl: bookmark.url || "",
+        browserTitle: bookmark.url ? (bookmark.title || bookmark.url) : "",
+        tabType: undefined,
+        history: []
+      }
+
+      return normalizeTabState({
+        ...current,
+        tabs: [...current.tabs, bookmarkTab],
+        activeTabId: bookmarkTab.id
+      }, appSessionId)
+    })
+
+    setShowHistory(false)
+    setShowPricing(false)
+  }, [appSessionId])
+
+  const handleAddCurrentBookmark = useCallback(() => {
+    const sourceTab = tabs.find(tab => tab.id === activeTabId) || activeTab
+    const hasUrl = Boolean(sourceTab?.browserUrl)
+    const hasQuery = Boolean(sourceTab?.query?.trim())
+    const bookmark = {
+      id: crypto.randomUUID(),
+      title: hasUrl
+        ? (sourceTab.browserTitle || sourceTab.browserUrl)
+        : hasQuery
+          ? sourceTab.query.trim()
+          : "New Tab",
+      url: hasUrl ? sourceTab.browserUrl : "",
+      query: hasUrl ? "" : hasQuery ? sourceTab.query.trim() : "",
+      createdAt: new Date().toISOString()
+    }
+
+    const nextBookmarks = [bookmark, ...readBookmarks()]
+    writeBookmarks(nextBookmarks)
+    window.dispatchEvent(new CustomEvent("superbrowser:bookmarks-updated", { detail: nextBookmarks }))
+    return bookmark
+  }, [activeTab, activeTabId, tabs])
+
+  const handleOpenPlaceholder = useCallback((title, message) => {
+    setPlaceholderModal({ title, message })
+  }, [])
+
+  const handleOpenSettings = useCallback(() => {
+    setSettingsOpen(true)
+  }, [])
+
+  const handleFindInPage = useCallback(() => {
+    setShowFindBox(true)
+  }, [])
+
+  const handlePrint = useCallback(async () => {
+    const openElectronPrintPreview = async (pdfData, title = "SuperBrowser Print Preview") => {
+      const bytes = pdfData instanceof Uint8Array ? pdfData : new Uint8Array(pdfData)
+      await window.superBrowserDesktop.app.showPrintPreview(Array.from(bytes), title)
+    }
+
+    const activeWebview = document.querySelector('webview[data-active-browser-view="true"]')
+    if (window.superBrowserDesktop?.isElectron) {
+      if (activeWebview?.printToPDF && window.superBrowserDesktop?.app?.showPrintPreview) {
+        try {
+          activeWebview.focus?.()
+          const pdfData = await activeWebview.printToPDF({
+            printBackground: true,
+            marginsType: 0,
+            preferCSSPageSize: true
+          })
+          await openElectronPrintPreview(pdfData, activeTab?.browserTitle || activeTab?.title || "SuperBrowser Print Preview")
+          return
+        } catch {
+          // Fall through to Electron's direct print as a last resort.
         }
-        return currentActiveId
-      })
-      return filtered
+      }
+
+      if (window.superBrowserDesktop?.app?.printPreview) {
+        try {
+          await window.superBrowserDesktop.app.printPreview(activeTab?.title || "SuperBrowser Print Preview")
+          return
+        } catch {
+          // Fall through to direct printing below.
+        }
+      }
+
+      if (activeWebview?.print) {
+        activeWebview.print({ printBackground: true })
+        return
+      }
+
+      window.superBrowserDesktop?.app?.print?.().catch(() => window.print())
+      return
+    }
+
+    const activeFrame = document.querySelector('iframe[data-active-browser-view="true"]')
+    if (activeFrame?.contentWindow) {
+      try {
+        activeFrame.contentWindow.focus()
+        activeFrame.contentWindow.print()
+        return
+      } catch { }
+    }
+
+    if (activeTab?.browserUrl) {
+      const printWindow = window.open(activeTab.browserUrl, '_blank', 'noopener,noreferrer')
+      if (printWindow) {
+        printWindow.addEventListener?.('load', () => printWindow.print(), { once: true })
+        window.setTimeout(() => printWindow.print?.(), 1200)
+        return
+      }
+    }
+
+    window.print()
+  }, [activeTab?.browserTitle, activeTab?.title, activeTab?.browserUrl])
+
+  const handleDeleteBrowsingData = useCallback(() => {
+    Object.values(searchControllersRef.current).forEach(controller => controller?.abort?.())
+    searchControllersRef.current = {}
+    searchCacheRef.current = {}
+    setBrowserHistory([])
+
+    const freshTabState = createInitialTabState(appSessionId)
+    setTabState(freshTabState)
+    setShowHistory(false)
+    setShowPricing(false)
+    setShowFindBox(false)
+    setShowContextInfo(false)
+
+    try {
+      const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY)
+      const savedBookmarks = window.localStorage.getItem(BOOKMARKS_STORAGE_KEY)
+      window.localStorage.clear()
+      if (savedTheme) window.localStorage.setItem(THEME_STORAGE_KEY, savedTheme)
+      if (savedBookmarks) window.localStorage.setItem(BOOKMARKS_STORAGE_KEY, savedBookmarks)
+    } catch { }
+
+    try {
+      window.sessionStorage.clear()
+    } catch { }
+
+    if (window.superBrowserDesktop?.app?.clearBrowsingData) {
+      window.superBrowserDesktop.app.clearBrowsingData().catch(() => { })
+    }
+  }, [appSessionId])
+
+  const handleGlobalWorkspaceWipe = useCallback(async () => {
+    const confirmed = window.confirm(
+      "Are you sure you want to permanently clear all tabs, browsing history, and AI contexts? This cannot be undone."
+    )
+    if (!confirmed) return
+
+    try {
+      await clearEntireSessionWorkspace(appSessionId || "default-session")
+    } catch (error) {
+      console.warn("Backend workspace wipe failed; clearing local browser state anyway.", error)
+    }
+
+    handleDeleteBrowsingData()
+  }, [appSessionId, handleDeleteBrowsingData])
+
+  useEffect(() => {
+    if (!window.superBrowserDesktop?.app?.onFindInPage) return
+    return window.superBrowserDesktop.app.onFindInPage(handleFindInPage)
+  }, [handleFindInPage])
+
+  useEffect(() => {
+    if (!window.superBrowserDesktop?.app?.onDeleteBrowsingData) return
+    return window.superBrowserDesktop.app.onDeleteBrowsingData(handleDeleteBrowsingData)
+  }, [handleDeleteBrowsingData])
+
+  useEffect(() => {
+    if (!window.superBrowserDesktop?.app?.onOpenDownloads) return
+    return window.superBrowserDesktop.app.onOpenDownloads(openDownloadsTab)
+  }, [openDownloadsTab])
+
+  const handleCloseTab = useCallback((tabId, e) => {
+    if (e && e.stopPropagation) e.stopPropagation()
+    setTabState(current => {
+      if (current.tabs.length === 1) {
+        const r = {
+          ...createNewTab(appSessionId),
+          tabNumber: 1,
+          title: "New Tab"
+        }
+        const next = {
+          tabs: [r],
+          activeTabId: r.id
+        }
+        return normalizeTabState(next, appSessionId)
+      }
+      const filtered = current.tabs.filter(t => t.id !== tabId)
+      if (tabId !== current.activeTabId) {
+        return normalizeTabState({
+          ...current,
+          tabs: filtered
+        }, appSessionId)
+      }
+      const index = current.tabs.findIndex(t => t.id === tabId)
+      const fallbackIndex = Math.max(0, index - 1)
+      return normalizeTabState({
+        tabs: filtered,
+        activeTabId: filtered[fallbackIndex]?.id || filtered[0]?.id || null
+      }, appSessionId)
     })
-  }
+  }, [appSessionId])
 
   // Unified Top-Level Keyboard Shortcuts Manager
   useEffect(() => {
@@ -311,27 +864,62 @@ export default function App() {
         return
       }
 
+      // 2. Ctrl + T : New Tab
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 't') {
+        if (window.superBrowserDesktop?.isElectron) return
+        e.preventDefault()
+        requestNewTab()
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
+        if (window.superBrowserDesktop?.isElectron) return
+        e.preventDefault()
+        handleNewIncognitoWindow()
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'j') {
+        e.preventDefault()
+        openDownloadsTab()
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o') {
+        e.preventDefault()
+        openBookmarksTab()
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Delete') {
+        e.preventDefault()
+        handleDeleteBrowsingData()
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault()
+        handleFindInPage()
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        e.preventDefault()
+        handlePrint()
+        return
+      }
+
       // Stop handling other hotkeys if typing inside an interactive field
       if (isTyping) return
 
-      // 2. Ctrl + T : New Tab
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 't') {
-        e.preventDefault()
-        handleAddTab()
-        return
-      }
-
-      // 3. Ctrl + W : Close Tab
+      // 4. Ctrl + W : Close Tab
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'w') {
         e.preventDefault()
-        setActiveTabId(currentId => {
-          if (currentId) handleCloseTab(currentId)
-          return currentId
-        })
+        if (activeTabId) handleCloseTab(activeTabId)
         return
       }
 
-      // 4. Ctrl + 1 / 2 / 3 : Switch Tab Operating Modes
+      // 5. Ctrl + 1 / 2 / 3 : Switch Tab Operating Modes
       if ((e.ctrlKey || e.metaKey) && ['1', '2', '3'].includes(e.key)) {
         e.preventDefault()
         const modes = ['seo', 'ai', 'community']
@@ -339,7 +927,7 @@ export default function App() {
         return
       }
 
-      // 5. Escape : Clear Search Query
+      // 6. Escape : Clear Search Query
       if (e.key === 'Escape') {
         e.preventDefault()
         setActiveTabId(currentId => {
@@ -349,7 +937,7 @@ export default function App() {
         return
       }
 
-      // 6. '?' Key : Open Hotkeys Help Modal
+      // 7. '?' Key : Open Hotkeys Help Modal
       if (e.key === '?') {
         e.preventDefault()
         setShowShortcutsHelp(true)
@@ -359,30 +947,100 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [appSessionId, handleModeChange, updateTab, handleAddTab, handleCloseTab])
+  }, [activeTabId, handleModeChange, updateTab, requestNewTab, handleCloseTab, handleNewIncognitoWindow, openDownloadsTab, openBookmarksTab, handleDeleteBrowsingData, handleFindInPage, handlePrint])
 
-  function handleHistoryClick(item) { updateTab(activeTabId, { query: item.query, activeMode: item.mode }); setTimeout(() => handleSearch(activeTabId), 0) }
+  function handleHistoryClick(item) {
+    if (item?.type === "page" && item.url) {
+      openInAppUrl(item.url, item.title || item.url)
+      setShowHistory(false)
+      return
+    }
+    updateTab(activeTabId, {
+      query: item.query,
+      activeMode: item.mode || "seo",
+      tabType: undefined,
+      browserUrl: "",
+      browserTitle: "",
+      results: null,
+      error: null
+    })
+    setTimeout(() => handleSearch(activeTabId, persona), 0)
+    setShowHistory(false)
+  }
 
   function openInAppUrl(url, title = "Web Page") {
     if (!url) return
-    // SEC-02: Validate URL scheme — only allow http: and https:
-    try {
-      const parsed = new URL(url)
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        console.warn('[SuperBrowser] Blocked non-http(s) URL:', parsed.protocol, url)
-        return
+    recordHistoryItem({
+      type: "page",
+      url,
+      title: title || url
+    })
+    setTabState(current => {
+      const targetTabId = current.activeTabId || activeTabId
+      if (!targetTabId) return current
+      const next = {
+        ...current,
+        tabs: current.tabs.map(tab => tab.id === targetTabId
+          ? {
+            ...tab,
+            tabType: undefined,
+            browserUrl: url,
+            browserTitle: title,
+            title: (title || "Web Page").slice(0, 25)
+          }
+          : tab),
+        activeTabId: targetTabId
       }
-    } catch {
-      console.warn('[SuperBrowser] Blocked malformed URL:', url)
-      return
-    }
-    const bt = createNewTab(appSessionId); bt.browserUrl = url; bt.browserTitle = title; bt.title = (title || "Web").slice(0, 25); bt.query = url
-    setTabs(p => [...p, bt]); setActiveTabId(bt.id)
-    if (activeTab) contextManager.addVisitedPage(activeTabId, activeTab.sessionId, url, title, `Visited: ${url}`)
+      return normalizeTabState(next, appSessionId)
+    })
+    if (!isIncognito && activeTab) contextManager.addVisitedPage(activeTabId, activeTab.sessionId, url, title, `Visited: ${url}`)
   }
+
   function goHome() {
     updateTab(activeTabId, { query: "", results: null, loading: false, error: null, browserUrl: "", browserTitle: "" })
   }
+
+  // Phase 6: Context Restored banner style
+  const contextRestoredBanner = contextRestored && (
+    <div style={{
+      background: '#22c55e',
+      color: 'white',
+      padding: '8px 16px',
+      borderRadius: '8px',
+      fontSize: '14px',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '8px',
+      marginBottom: '16px',
+      fontWeight: '500',
+      boxShadow: '0 2px 8px rgba(34, 197, 94, 0.3)',
+      animation: 'fadeIn 0.3s ease-in'
+    }}>
+      <span style={{ fontSize: '18px' }}>🔄</span>
+      Context restored from your last session
+    </div>
+  );
+
+  const contextRestoredBannerSearch = contextRestored && (
+    <div style={{
+      background: '#22c55e',
+      color: 'white',
+      padding: '6px 14px',
+      borderRadius: '0 0 8px 8px',
+      fontSize: '13px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      margin: '0 20px',
+      justifyContent: 'center',
+      fontWeight: '500',
+      boxShadow: '0 2px 8px rgba(34, 197, 94, 0.2)',
+      animation: 'fadeIn 0.3s ease-in'
+    }}>
+      <span>🔄</span>
+      Context restored from your last session
+    </div>
+  );
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-transparent text-[var(--text-primary)] relative z-10">
@@ -396,45 +1054,93 @@ export default function App() {
         activeTabId={activeTabId}
         onTabClick={(tabId) => { setShowPricing(false); setActiveTabId(tabId) }}
         onCloseTab={handleCloseTab}
-        onAddTab={() => { setShowPricing(false); handleAddTab() }}
-        onShowHistory={() => { setShowPricing(false); setShowHistory(true) }}
+        onAddTab={requestNewTab}
+        onNewWindow={handleNewWindow}
+        onNewIncognitoWindow={handleNewIncognitoWindow}
+        onShowHistory={() => {
+          setShowPricing(false)
+          if (isIncognito) {
+            setShowHistory(false)
+            setPlaceholderModal({
+              title: "History is off in Incognito",
+              message: "Pages and searches from Incognito windows are not saved."
+            })
+            return
+          }
+          setShowHistory(true)
+        }}
         onOpenPricing={() => { setShowHistory(false); setShowPricing(true) }}
+        onOpenDownloads={openDownloadsTab}
+        onOpenBookmarks={openBookmarksTab}
+        onOpenExtensions={() => handleOpenPlaceholder("Extensions are not supported yet", "Extension management is not available in this version of SuperBrowser.")}
+        onDeleteBrowsingData={handleDeleteBrowsingData}
+        onFindInPage={handleFindInPage}
+        onPrint={handlePrint}
+        onOpenSettings={handleOpenSettings}
+        isIncognito={isIncognito}
         theme={theme}
         onToggleTheme={toggleTheme}
+        onWipeWorkspace={handleGlobalWorkspaceWipe}
       />
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col min-h-0 relative">
+      <div className="print-surface flex-1 flex flex-col min-h-0 relative">
         {window.superBrowserDesktop?.isElectron && <BackendStatusBanner status={backendStatus} />}
 
-        {isBrowserTab ? (
+        {isBookmarksTab ? (
+          <BookmarksPage
+            activeTab={activeTab}
+            onOpenBookmark={openBookmarkInNewTab}
+            onAddCurrentPage={handleAddCurrentBookmark}
+          />
+        ) : isDownloadsTab ? (
+          <DownloadsPage />
+        ) : isBrowserTab ? (
           <div className="flex-1 min-h-0 bg-white">
             <BrowserPanel url={activeTab.browserUrl} title={activeTab.browserTitle} onClose={() => updateTab(activeTabId, { browserUrl: "", browserTitle: "" })} />
           </div>
         ) : isNewTab ? (
           /* Hand-drawn Centered Landing Page */
-          <div className="flex-1 flex flex-col items-center justify-center p-4 animate-fade-in-up">
-            <div className="relative mb-12">
+          <div className="flex-1 flex flex-col items-center justify-center p-4">
+            {/* Phase 6: Context Restored Banner */}
+            {contextRestoredBanner}
+            <div className="relative mb-12 text-center">
               <div className="absolute inset-0 bg-white/70 blur-3xl -z-10 rounded-full scale-[1.3] pointer-events-none"></div>
               <h1 className="title-hero text-center select-none m-0">SUPER BROWSER</h1>
             </div>
 
             <div className="w-full max-w-2xl mb-8">
               <div className="pill-search flex items-center px-6 py-4 w-full cursor-text relative bg-white/80 backdrop-blur-sm" onClick={() => searchInputHomeRef.current?.focus()}>
-                <button 
-                  onClick={(e) => { e.stopPropagation(); handleSearch(activeTabId) }} 
-                  className="text-[var(--text-secondary)] hover:text-[var(--action-primary)] transition-colors shrink-0"
-                >
-                  <SearchIcon />
-                </button>
+                {activeTab?.loading ? (
+                  <div className="w-[18px] h-[18px] rounded-full border-2 border-[var(--border-color)] border-t-[var(--action-primary)] animate-spin shrink-0" />
+                ) : (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (activeTab?.query.trim()) {
+                        handleSearch(activeTabId, persona)
+                      }
+                    }}
+                    className="text-[var(--text-secondary)] hover:text-[var(--action-primary)] transition-colors shrink-0"
+                    title="Search"
+                  >
+                    <SearchIcon />
+                  </button>
+                )}
                 <input
                   ref={searchInputHomeRef}
-                  type="text" 
-                  value={activeTab?.query || ''} 
-                  onChange={(e) => updateTab(activeTabId, { query: e.target.value })} 
-                  onKeyDown={(e) => e.key === 'Enter' && handleSearch(activeTabId)}
+                  type="text"
+                  value={activeTab?.query || ''}
+                  onChange={(e) => updateTab(activeTabId, { query: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && activeTab?.query.trim()) {
+                      e.preventDefault()
+                      handleSearch(activeTabId, persona)
+                    }
+                  }}
                   placeholder="Enter your search..."
-                  className="flex-1 ml-4 outline-none text-xl bg-transparent text-[var(--text-primary)]"
+                  disabled={activeTab?.loading}
+                  className="flex-1 ml-4 outline-none text-xl bg-transparent text-[var(--text-primary)] disabled:opacity-50"
                   style={{ letterSpacing: '-0.01em' }}
                 />
               </div>
@@ -449,169 +1155,220 @@ export default function App() {
         ) : (
           /* Active Search View */
           <div className="flex-1 flex flex-col min-h-0 bg-white shadow-xl relative z-10">
+            {/* Phase 6: Context Restored Banner for Search View */}
+            {contextRestoredBannerSearch}
             {/* Minimalist Top Header */}
             <div className="px-6 py-3 border-b border-[var(--border-color)] flex items-center gap-4 bg-white">
-               {/* Browser Navigation Controls */}
-               <div className="flex items-center gap-1">
-                 <button onClick={() => {
-                   if (activeTab?.history && activeTab.history.length > 1) {
-                     const prev = activeTab.history[activeTab.history.length - 2];
-                     updateTab(activeTabId, { query: prev.query, activeMode: prev.mode, history: activeTab.history.slice(0, -1) });
-                     setTimeout(() => handleSearch(activeTabId), 0);
-                   } else {
-                     goHome();
-                   }
-                 }} className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Back">
-                   <ChevronLeftIcon />
-                 </button>
-                 <button disabled className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] opacity-30 cursor-not-allowed transition-colors" title="Forward">
-                   <ChevronRightIcon />
-                 </button>
-                 <button onClick={() => { if (activeTab?.query) handleSearch(activeTabId) }} className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors" title="Reload">
+              {/* Browser Navigation Controls */}
+              <div className="flex items-center gap-1">
+                <button onClick={() => {
+                  if (activeTab?.history && activeTab.history.length > 1) {
+                    const prev = activeTab.history[activeTab.history.length - 2];
+                    updateTab(activeTabId, { query: prev.query, activeMode: prev.mode, history: activeTab.history.slice(0, -1) });
+                    setTimeout(() => handleSearch(activeTabId, persona), 0);
+                  } else {
+                    goHome();
+                  }
+                }} className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Back">
+                  <ChevronLeftIcon />
+                </button>
+                <button disabled className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] opacity-30 cursor-not-allowed transition-colors" title="Forward">
+                  <ChevronRightIcon />
+                </button>
+                <button onClick={() => { if (activeTab?.query) handleSearch(activeTabId, persona) }} className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Reload">
+                  <RefreshIcon />
+                </button>
+                <button onClick={goHome} className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Home">
+                  <HomeIcon />
+                </button>
+              </div>
 
-                   <RefreshIcon />
-                 </button>
-                 <button onClick={goHome} className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Home">
-                   <HomeIcon />
-                 </button>
-               </div>
-
-               <div className="pill-search flex items-center px-5 py-2.5 flex-1 max-w-3xl">
-                  {activeTab?.loading ? <div className="w-[18px] h-[18px] rounded-full border-2 border-[var(--border-color)] border-t-[var(--action-primary)] animate-spin" /> : <span className="text-[var(--text-tertiary)]"><SearchIcon /></span>}
-                  <input 
-                    ref={searchInputHeaderRef}
-                    type="text" 
-                    value={activeTab?.query || ''} 
-                    onChange={(e) => updateTab(activeTabId, { query: e.target.value })} 
-                    onKeyDown={(e) => e.key === 'Enter' && handleSearch(activeTabId)}
-                    placeholder="Search..."
-                    className="flex-1 ml-3 outline-none text-base bg-transparent text-[var(--text-primary)]" />
-                  {activeTab?.loading ? (
-                    <button 
-                      onClick={() => handleStop(activeTabId)} 
-                      className="ml-2 px-4 py-1.5 rounded-full bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-colors"
-                    >
-                      Stop
-                    </button>
-                  ) : (
-                    <button 
-                      onClick={() => handleSearch(activeTabId)} 
-                      disabled={!activeTab?.query?.trim()}
-                      className="ml-2 px-4 py-1.5 rounded-full bg-[var(--action-primary)] text-white text-sm font-medium hover:bg-[var(--action-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      Search
-                    </button>
-                  )}
-
-               </div>
-               <div className="flex items-center gap-2">
-                 <button onClick={() => handleModeChange('seo')} className={`pill-btn px-4 py-1.5 ${activeTab?.activeMode === 'seo' ? 'active' : ''}`}>SEO</button>
-                 <button onClick={() => handleModeChange('ai')} className={`pill-btn px-4 py-1.5 ${activeTab?.activeMode === 'ai' ? 'active' : ''}`}>AI</button>
-                 <button onClick={() => handleModeChange('community')} className={`pill-btn px-4 py-1.5 ${activeTab?.activeMode === 'community' ? 'active' : ''}`}>REVIEW</button>
-               </div>
+              <div className="pill-search flex items-center px-5 py-2.5 flex-1 max-w-3xl">
+                {activeTab?.loading ? <div className="w-[18px] h-[18px] rounded-full border-2 border-[var(--border-color)] border-t-[var(--action-primary)] animate-spin" /> : <span className="text-[var(--text-tertiary)]"><SearchIcon /></span>}
+                <input
+                  ref={searchInputHeaderRef}
+                  type="text"
+                  value={activeTab?.query || ''}
+                  onChange={(e) => updateTab(activeTabId, { query: e.target.value })}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSearch(activeTabId, persona)}
+                  placeholder="Search..."
+                  className="flex-1 ml-3 outline-none text-base bg-transparent text-[var(--text-primary)]"
+                />
+                <button
+                  onClick={() => handleSearch(activeTabId, persona)}
+                  disabled={!activeTab?.query?.trim() || activeTab?.loading}
+                  className="ml-2 px-4 py-1.5 rounded-full bg-[var(--action-primary)] text-white text-sm font-medium hover:bg-[var(--action-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  Search
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => handleModeChange('seo')} className={`pill-btn px-4 py-1.5 ${activeTab?.activeMode === 'seo' ? 'active' : ''}`}>SEO</button>
+                <button onClick={() => handleModeChange('ai')} className={`pill-btn px-4 py-1.5 ${activeTab?.activeMode === 'ai' ? 'active' : ''}`}>AI</button>
+                <button onClick={() => handleModeChange('community')} className={`pill-btn px-4 py-1.5 ${activeTab?.activeMode === 'community' ? 'active' : ''}`}>REVIEW</button>
+              </div>
             </div>
 
             {/* Content Area */}
             <div className="flex-1 flex overflow-hidden bg-white">
-               <div className="flex-1 overflow-auto p-6 md:p-10 max-w-5xl mx-auto">
-                 {activeTab?.error && <div className="text-red-700 border border-red-200 bg-red-50 p-4 rounded-xl mb-6 text-sm max-w-4xl mx-auto">{activeTab.error}</div>}
-                 
-                 {/* AI Options Bar inside results area for cleaner header */}
-                 {activeTab?.activeMode === 'ai' && (
-                    <div className="max-w-4xl mx-auto mb-6 flex justify-between items-center">
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <span className="text-sm font-medium text-[var(--text-secondary)]">Model:</span>
-                        <ModelDropdown value={activeTab?.selectedModel || "default"} onChange={(model) => updateTab(activeTabId, { selectedModel: model })} />
-                        
-                        {activeTab?.results && (
-                          <button 
-                            onClick={() => handleRegenerate(activeTabId)}
-                            disabled={activeTab?.loading || !activeTab?.lastQuery}
-                            className="pill-btn px-4 py-1.5 ml-3 text-xs flex items-center gap-1.5 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                            title="Regenerate Answer"
-                          >
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
-                            </svg>
-                            Regenerate
-                          </button>
-                        )}
-                      </div>
-                      <ContextIndicator tabId={activeTabId} contextManager={contextManager} onToggleInfo={() => updateTab(activeTabId, { showChat: !activeTab?.showChat })} />
+              <div className="flex-1 overflow-auto p-6 md:p-10 max-w-5xl mx-auto">
+                {activeTab?.error && <div className="text-red-700 border border-red-200 bg-red-50 p-4 rounded-xl mb-6 text-sm max-w-4xl mx-auto">{activeTab.error}</div>}
+
+                {/* AI Persona Bar inside results area for cleaner header */}
+                {activeTab?.activeMode === 'ai' && (
+                  <div className="max-w-4xl mx-auto mb-6 flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm font-medium text-[var(--text-secondary)]">Persona:</span>
+                      <PersonaDropdown value={persona} onChange={setPersona} personas={PERSONAS} />
                     </div>
-                  )}
+                    <ContextIndicator tabId={activeTabId} contextManager={contextManager} onToggleInfo={() => setShowContextInfo(!showContextInfo)} />
+                  </div>
+                )}
 
-                 <ResultsPanel mode={activeTab?.activeMode} results={activeTab?.results} loading={activeTab?.loading} onOpenLink={openInAppUrl} query={activeTab?.query} />
-               </div>
+                <ResultsPanel mode={activeTab?.activeMode} results={activeTab?.results} loading={activeTab?.loading} onOpenLink={openInAppUrl} query={activeTab?.query} />
+              </div>
 
-               {activeTab?.showChat && (
-                 <ChatSidebar 
-                   tabId={activeTabId} 
-                   appSessionId={activeTab.sessionId} 
-                   onClose={() => updateTab(activeTabId, { showChat: false })}
-                   persona={activeTab?.selectedModel || "default"}
-                 />
-               )}
-               
-               {/* History Panel Sidebar - Now accessed via browser menu */}
-               {showHistory && (
-                 <div className="w-80 border-l border-[var(--border-color)] bg-white p-4 overflow-y-auto">
-                   <div className="flex items-center justify-between mb-4">
-                     <h3 className="font-semibold text-[var(--text-primary)]">Tab History</h3>
-                     <button onClick={() => setShowHistory(false)} className="p-1 rounded hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)]"><XIcon /></button>
-                   </div>
-                   <div className="space-y-2">
-                     {activeTab?.history?.slice().reverse().map((item, i) => (
-                       <button key={i} onClick={() => handleHistoryClick(item)} className="w-full text-left p-3 rounded-lg border border-[var(--border-color)] hover:border-[var(--border-hover)] hover:bg-[var(--bg-hover)] transition-colors">
-                         <p className="text-sm truncate mb-1 text-[var(--text-primary)]">{item.query}</p>
-                         <span className="text-[11px] px-2 py-0.5 rounded font-medium bg-[var(--bg-elevated)] text-[var(--text-secondary)] uppercase">{item.mode}</span>
-                       </button>
-                     ))}
-                   </div>
-                 </div>
-               )}
             </div>
           </div>
+        )}
+        {showHistory && (
+          <HistoryPanel
+            items={browserHistory}
+            onOpen={handleHistoryClick}
+            onClose={() => setShowHistory(false)}
+          />
         )}
       </div>
 
       {showPricing && <PricingPage onClose={() => setShowPricing(false)} />}
       {showShortcutsHelp && <ShortcutsHelpModal onClose={() => setShowShortcutsHelp(false)} />}
+      {showFindBox && <FindInPageBox onClose={() => setShowFindBox(false)} />}
+      {settingsOpen && <SettingsModal theme={theme} onToggleTheme={toggleTheme} onClose={() => setSettingsOpen(false)} />}
+      {placeholderModal && (
+        <PlaceholderModal
+          title={placeholderModal.title}
+          message={placeholderModal.message}
+          onClose={() => setPlaceholderModal(null)}
+        />
+      )}
       <ContextWindow show={showContextInfo} onClose={() => setShowContextInfo(false)} tabId={activeTabId} sessionId={appSessionId} sessionStartedAt={sessionStartedAt} sessionStatus={sessionStatus} contextManager={contextManager} />
     </div>
   )
 }
 
+// Add this CSS animation at the very bottom of the file or in your global CSS
+// @keyframes fadeIn {
+//   from { opacity: 0; transform: translateY(-10px); }
+//   to { opacity: 1; transform: translateY(0); }
+// }
+
 /* ── UI Components ── */
 
-function TabBar({ tabs, activeTabId, onTabClick, onCloseTab, onAddTab, onShowHistory, onOpenPricing, theme, onToggleTheme }) {
+function TabBar({
+  tabs,
+  activeTabId,
+  onTabClick,
+  onCloseTab,
+  onAddTab,
+  onNewWindow,
+  onNewIncognitoWindow,
+  onShowHistory,
+  onOpenPricing,
+  onOpenDownloads,
+  onOpenBookmarks,
+  onOpenExtensions,
+  onDeleteBrowsingData,
+  onFindInPage,
+  onPrint,
+  onOpenSettings,
+  isIncognito,
+  theme,
+  onToggleTheme,
+  onWipeWorkspace
+}) {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const nextTheme = theme === 'dark' ? 'light' : 'dark'
+  const activeTabRef = useRef(null)
+
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeTabId])
 
   return (
-    <div className="flex border-b border-[var(--border-color)] w-full bg-white select-none" style={{ height: '44px' }}>
-      <div className="flex-1 flex overflow-x-auto scrollbar-hide h-full">
-        {tabs.map((tab, idx) => (
-          <div key={tab.id} onClick={() => onTabClick(tab.id)}
-            className={`flex items-center gap-2 px-4 h-full min-w-[140px] max-w-[240px] cursor-pointer border-r border-[var(--border-color)] group ${tab.id === activeTabId ? 'tab-active' : 'tab-inactive'}`}>
-            <span className="truncate text-[13px] flex-1">
-              {tab.id === activeTabId ? `TAB ${idx + 1}` : (tab.title.length > 20 ? tab.title.slice(0, 20) + '…' : tab.title)}
+    <div className="no-print relative z-50 flex border-b border-[var(--border-color)] w-full bg-white select-none" style={{ height: '44px' }}>
+      <div className="flex-1 min-w-0 flex overflow-x-auto scrollbar-hide h-full" role="tablist" aria-label="Browser tabs">
+        {tabs.map((tab) => (
+          <div
+            key={tab.id}
+            ref={tab.id === activeTabId ? activeTabRef : null}
+            data-tab-id={tab.id}
+            role="tab"
+            tabIndex={0}
+            aria-selected={tab.id === activeTabId}
+            onClick={() => onTabClick(tab.id)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return
+              e.preventDefault()
+              onTabClick(tab.id)
+            }}
+            className={`flex-none flex items-center gap-2 px-3 h-full w-[184px] cursor-pointer border-r border-[var(--border-color)] group text-left ${tab.id === activeTabId ? 'tab-active' : 'tab-inactive'}`}
+            title={tab.title}
+          >
+            <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${tab.id === activeTabId ? 'bg-[rgba(50,121,249,0.12)] text-[var(--action-primary)]' : 'bg-white text-[var(--text-tertiary)]'}`}>
+              TAB {tab.tabNumber || 1}
             </span>
-            <button onClick={(e) => onCloseTab(tab.id, e)} className="w-5 h-5 flex items-center justify-center rounded hover:bg-black/5 opacity-0 group-hover:opacity-100 text-[var(--text-tertiary)]"><XIcon /></button>
+            <span className="truncate text-[13px] flex-1 min-w-0">
+              {tab.title.length > 20 ? tab.title.slice(0, 20) + '…' : tab.title}
+            </span>
+            <button
+              type="button"
+              onClick={(e) => onCloseTab(tab.id, e)}
+              className="w-5 h-5 shrink-0 flex items-center justify-center rounded hover:bg-black/5 opacity-0 group-hover:opacity-100 text-[var(--text-tertiary)]"
+              title="Close tab"
+            >
+              <XIcon />
+            </button>
           </div>
         ))}
-        <button onClick={onAddTab} className="px-4 h-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border-r border-[var(--border-color)] flex items-center justify-center transition-colors" title="New Tab (Ctrl+T)">
+        <button type="button" onClick={onAddTab} className="flex-none w-12 h-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border-r border-[var(--border-color)] flex items-center justify-center transition-colors" title="New Tab (Ctrl+T)" aria-label="New tab">
           <PlusIcon />
         </button>
       </div>
-      <div className="flex items-center h-full border-l border-[var(--border-color)] relative">
+      <div className="shrink-0 flex items-center h-full border-l border-[var(--border-color)] relative">
         <button
           onClick={() => setIsMenuOpen(!isMenuOpen)}
           className={`px-5 h-full text-[12px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors ${isMenuOpen ? 'bg-[var(--bg-hover)]' : ''}`}
         >
           BROWSER MENU
         </button>
-        {isMenuOpen && <BrowserMenu onClose={() => setIsMenuOpen(false)} onAddTab={onAddTab} onShowHistory={onShowHistory} onOpenPricing={onOpenPricing} />}
+        {isMenuOpen && (
+          <BrowserMenu
+            onClose={() => setIsMenuOpen(false)}
+            onAddTab={onAddTab}
+            onNewWindow={onNewWindow}
+            onNewIncognitoWindow={onNewIncognitoWindow}
+            onShowHistory={onShowHistory}
+            onOpenPricing={onOpenPricing}
+            onOpenDownloads={onOpenDownloads}
+            onOpenBookmarks={onOpenBookmarks}
+            onOpenExtensions={onOpenExtensions}
+            onDeleteBrowsingData={onDeleteBrowsingData}
+            onFindInPage={onFindInPage}
+            onPrint={onPrint}
+            onOpenSettings={onOpenSettings}
+            isIncognito={isIncognito}
+            onWipeWorkspace={onWipeWorkspace}
+          />
+        )}
+
+        <button
+          type="button"
+          onClick={onWipeWorkspace}
+          className="mx-2 px-3 py-1.5 text-xs font-semibold bg-red-600 text-white hover:bg-red-700 rounded transition-colors"
+          title="Clear all session data"
+        >
+          Wipe Workspace
+        </button>
 
         {/* Theme Toggle Button */}
         <button
@@ -690,6 +1447,550 @@ function ShortcutsHelpModal({ onClose }) {
   )
 }
 
+function PlaceholderModal({ title, message, onClose }) {
+  useEffect(() => {
+    const handleKeyDown = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in-up" onClick={onClose}>
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl p-6 border border-[var(--border-color)]" onClick={(e) => e.stopPropagation()}>
+        <div className="flex justify-between items-center pb-4 mb-4 border-b border-[var(--border-color)]">
+          <h3 className="text-lg font-semibold tracking-tight">{title}</h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)]"><XIcon /></button>
+        </div>
+        <p className="text-sm leading-relaxed text-[var(--text-secondary)] mb-5">{message}</p>
+        <button onClick={onClose} className="btn-primary px-4 py-2 text-sm font-medium">OK</button>
+      </div>
+    </div>
+  )
+}
+
+function HistoryPanel({ items, onOpen, onClose }) {
+  const formatHistoryTime = (value) => {
+    if (!value) return ""
+    try {
+      return new Date(value).toLocaleString()
+    } catch {
+      return ""
+    }
+  }
+
+  return (
+    <aside className="absolute inset-y-0 right-0 z-30 w-80 border-l border-[var(--border-color)] bg-white shadow-2xl p-4 overflow-y-auto">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-semibold text-[var(--text-primary)]">History</h3>
+        <button onClick={onClose} className="p-1 rounded hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)]"><XIcon /></button>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="card-minimal p-6 text-center">
+          <p className="text-sm font-medium text-[var(--text-primary)] mb-1">No history</p>
+          <p className="text-xs text-[var(--text-secondary)] m-0">Searches and opened pages will appear here.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {items.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => onOpen(item)}
+              className="w-full text-left p-3 rounded-lg border border-[var(--border-color)] hover:border-[var(--border-hover)] hover:bg-[var(--bg-hover)] transition-colors"
+            >
+              <p className="text-sm truncate mb-1 text-[var(--text-primary)]">{item.title || item.query || item.url}</p>
+              <p className="text-xs truncate mb-2 text-[var(--text-tertiary)]">{item.url || item.query}</p>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] px-2 py-0.5 rounded font-medium bg-[var(--bg-elevated)] text-[var(--text-secondary)] uppercase">
+                  {item.type === "page" ? "page" : item.mode || "search"}
+                </span>
+                <span className="text-[11px] text-[var(--text-tertiary)]">{formatHistoryTime(item.time)}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </aside>
+  )
+}
+
+function BookmarksPage({ activeTab, onOpenBookmark, onAddCurrentPage }) {
+  const [bookmarks, setBookmarks] = useState(() => readBookmarks())
+  const [query, setQuery] = useState("")
+
+  useEffect(() => {
+    const handleBookmarksUpdated = (event) => {
+      if (Array.isArray(event.detail)) {
+        setBookmarks(event.detail)
+        return
+      }
+      setBookmarks(readBookmarks())
+    }
+    window.addEventListener("superbrowser:bookmarks-updated", handleBookmarksUpdated)
+    window.addEventListener("storage", handleBookmarksUpdated)
+    return () => {
+      window.removeEventListener("superbrowser:bookmarks-updated", handleBookmarksUpdated)
+      window.removeEventListener("storage", handleBookmarksUpdated)
+    }
+  }, [])
+
+  const saveBookmarks = (items) => {
+    writeBookmarks(items)
+    setBookmarks(items)
+    window.dispatchEvent(new CustomEvent("superbrowser:bookmarks-updated", { detail: items }))
+  }
+
+  const addCurrentPage = () => {
+    const bookmark = onAddCurrentPage?.(activeTab)
+    if (bookmark) setBookmarks(readBookmarks())
+  }
+
+  const deleteBookmark = (bookmarkId) => {
+    saveBookmarks(bookmarks.filter(bookmark => bookmark.id !== bookmarkId))
+  }
+
+  const formatDate = (value) => {
+    if (!value) return ""
+    try {
+      return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+    } catch {
+      return value
+    }
+  }
+
+  const filteredBookmarks = bookmarks.filter(bookmark => {
+    const searchValue = `${bookmark.title || ""} ${bookmark.url || ""} ${bookmark.query || ""}`.toLowerCase()
+    return searchValue.includes(query.trim().toLowerCase())
+  })
+
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto bg-[var(--bg-page)]">
+      <div className="sticky top-0 z-10 bg-[var(--bg-page)]/95 backdrop-blur border-b border-[var(--border-color)]">
+        <div className="max-w-6xl mx-auto px-6 py-4 grid grid-cols-1 md:grid-cols-[220px_1fr_auto] gap-4 items-center">
+          <h1 className="text-2xl font-semibold tracking-tight m-0">Bookmarks</h1>
+          <div className="pill-search flex items-center px-4 py-2 bg-[var(--bg-surface)] shadow-none">
+            <SearchIcon />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search bookmarks"
+              className="flex-1 ml-3 bg-transparent outline-none text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]"
+            />
+          </div>
+          <button onClick={addCurrentPage} className="btn-secondary px-4 py-2 text-sm justify-self-end">
+            Add current page
+          </button>
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto px-6 py-6">
+        {filteredBookmarks.length === 0 ? (
+          <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-surface)] p-10 text-center">
+            <p className="text-lg font-medium text-[var(--text-primary)] mb-1">No bookmarks yet</p>
+            <p className="text-sm text-[var(--text-secondary)] m-0">Saved pages and searches will appear here.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredBookmarks.map(bookmark => {
+              const target = bookmark.url || bookmark.query || "New Tab"
+              return (
+                <div key={bookmark.id} className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-surface)] p-4 flex items-center gap-4 shadow-sm">
+                  <div className="w-10 h-10 rounded-full bg-[var(--bg-elevated)] border border-[var(--border-color)] flex items-center justify-center text-[var(--text-tertiary)] shrink-0">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                    </svg>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-[var(--text-primary)] truncate mb-1">{bookmark.title || target}</p>
+                    <p className="text-xs text-[var(--text-tertiary)] truncate mb-1">{target}</p>
+                    <p className="text-xs text-[var(--text-secondary)] m-0">{formatDate(bookmark.createdAt)}</p>
+                  </div>
+                  <button onClick={() => onOpenBookmark?.(bookmark)} className="btn-secondary px-3 py-2 text-sm">
+                    Open
+                  </button>
+                  <button
+                    onClick={() => deleteBookmark(bookmark.id)}
+                    className="p-2 rounded-full text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-red-600"
+                    title="Delete bookmark"
+                  >
+                    <XIcon />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DownloadsPage() {
+  const [downloads, setDownloads] = useState([])
+  const [query, setQuery] = useState("")
+  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(true)
+  const directoryInputRef = useRef(null)
+  const hasLoadedDownloadsRef = useRef(false)
+  const isDesktopDownloadsAvailable = Boolean(window.superBrowserDesktop?.downloads?.getList)
+  const isWebDownloads = !isDesktopDownloadsAvailable
+
+  const loadDownloads = useCallback(() => {
+    if (!isDesktopDownloadsAvailable) {
+      setDownloads(readWebDownloads())
+      setLoading(false)
+      hasLoadedDownloadsRef.current = true
+      return
+    }
+    if (!hasLoadedDownloadsRef.current) setLoading(true)
+    window.superBrowserDesktop.downloads.getList()
+      .then(items => {
+        setDownloads(Array.isArray(items) ? items : [])
+        setError("")
+      })
+      .catch(() => setError("Unable to load downloads."))
+      .finally(() => {
+        hasLoadedDownloadsRef.current = true
+        setLoading(false)
+      })
+  }, [isDesktopDownloadsAvailable])
+
+  useEffect(() => {
+    loadDownloads()
+    if (!isDesktopDownloadsAvailable) return
+    const interval = window.setInterval(loadDownloads, 5000)
+    return () => window.clearInterval(interval)
+  }, [loadDownloads, isDesktopDownloadsAvailable])
+
+  const filteredDownloads = downloads.filter(item => {
+    const text = `${item.fileName || ""} ${item.savePath || ""}`.toLowerCase()
+    return text.includes(query.trim().toLowerCase())
+  })
+
+  const openFolder = () => {
+    if (!window.superBrowserDesktop?.downloads?.openFolder) {
+      setError("Opening the downloads folder is available in the desktop app.")
+      return
+    }
+    window.superBrowserDesktop?.downloads?.openFolder?.().catch(() => setError("Unable to open downloads folder."))
+  }
+
+  const openFile = (path) => {
+    if (!path) return
+    if (!window.superBrowserDesktop?.downloads?.openFile) {
+      window.open(path, '_blank', 'noopener,noreferrer')
+      return
+    }
+    window.superBrowserDesktop?.downloads?.openFile?.(path).catch(() => setError("Unable to open file."))
+  }
+
+  const showInFolder = (path) => {
+    if (!path) {
+      openFolder()
+      return
+    }
+    if (window.superBrowserDesktop?.downloads?.showInFolder) {
+      window.superBrowserDesktop.downloads.showInFolder(path).catch(() => setError("Unable to show file in folder."))
+      return
+    }
+    openFolder()
+  }
+
+  const clearList = () => {
+    if (!isDesktopDownloadsAvailable) {
+      writeWebDownloads([])
+      setDownloads([])
+      setError("")
+      return
+    }
+    window.superBrowserDesktop?.downloads?.clearList?.()
+      .then(() => setDownloads([]))
+      .catch(() => setError("Unable to clear downloads."))
+  }
+
+  const saveWebDownloads = (items) => {
+    const nextItems = items
+      .sort((a, b) => new Date(b.endTime || 0) - new Date(a.endTime || 0))
+      .slice(0, 200)
+    writeWebDownloads(nextItems)
+    setDownloads(nextItems)
+    setError("")
+  }
+
+  const chooseDownloadsFolder = async () => {
+    if (!isWebDownloads) {
+      loadDownloads()
+      return
+    }
+
+    if (window.showDirectoryPicker) {
+      try {
+        const directory = await window.showDirectoryPicker({ mode: "read" })
+        const items = []
+        for await (const [name, handle] of directory.entries()) {
+          if (handle.kind !== "file") continue
+          const file = await handle.getFile()
+          items.push({
+            id: `web:${directory.name}:${name}:${file.lastModified}:${file.size}`,
+            fileName: name,
+            savePath: `${directory.name}/${name}`,
+            fileSize: file.size,
+            receivedBytes: file.size,
+            state: "completed",
+            startTime: new Date(file.lastModified).toISOString(),
+            endTime: new Date(file.lastModified).toISOString(),
+          })
+        }
+        saveWebDownloads(items)
+      } catch (error) {
+        if (error?.name !== "AbortError") setError("Unable to read the selected downloads folder.")
+      }
+      return
+    }
+
+    directoryInputRef.current?.click()
+  }
+
+  const handleDirectoryInputChange = (event) => {
+    const files = Array.from(event.target.files || [])
+    if (files.length === 0) return
+    const items = files.map(file => {
+      const relativePath = file.webkitRelativePath || file.name
+      return {
+        id: `web:${relativePath}:${file.lastModified}:${file.size}`,
+        fileName: file.name,
+        savePath: relativePath,
+        fileSize: file.size,
+        receivedBytes: file.size,
+        state: "completed",
+        startTime: new Date(file.lastModified).toISOString(),
+        endTime: new Date(file.lastModified).toISOString(),
+      }
+    })
+    saveWebDownloads(items)
+    event.target.value = ""
+  }
+
+  const formatBytes = (bytes) => {
+    const value = Number(bytes) || 0
+    if (value < 1024) return `${value} B`
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+    if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`
+    return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`
+  }
+
+  const formatTime = (value) => {
+    if (!value) return ""
+    try {
+      return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+    } catch {
+      return value
+    }
+  }
+
+  const formatStatus = (item) => {
+    if (item.state === "progress") {
+      return `${formatBytes(item.receivedBytes)}${item.fileSize ? ` of ${formatBytes(item.fileSize)}` : ""}`
+    }
+    if (item.state === "interrupted") return "Interrupted"
+    if (item.state === "cancelled") return "Cancelled"
+    return formatBytes(item.fileSize || item.receivedBytes)
+  }
+
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto bg-[var(--bg-page)]">
+      <div className="sticky top-0 z-10 bg-[var(--bg-page)]/95 backdrop-blur border-b border-[var(--border-color)]">
+        <div className="max-w-6xl mx-auto px-6 py-4 grid grid-cols-1 md:grid-cols-[220px_1fr_auto] gap-4 items-center">
+          <h1 className="text-2xl font-semibold tracking-tight m-0">Downloads</h1>
+          <div className="pill-search flex items-center px-4 py-2 bg-[var(--bg-surface)] shadow-none">
+            <SearchIcon />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search downloads"
+              className="flex-1 ml-3 bg-transparent outline-none text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]"
+            />
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            {isWebDownloads && (
+              <button onClick={chooseDownloadsFolder} className="btn-secondary px-4 py-2 text-sm">
+                Choose folder
+              </button>
+            )}
+            <button onClick={loadDownloads} className="btn-secondary px-3 py-2 text-sm">
+              Refresh
+            </button>
+            <button onClick={clearList} className="btn-secondary px-3 py-2 text-sm">
+              Clear all
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto px-6 py-6">
+        {isWebDownloads && (
+          <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-surface)] p-4 mb-4 text-sm text-[var(--text-secondary)]">
+            Browser mode cannot read your OS downloads folder until you choose it. Select your Downloads folder to list its files here.
+          </div>
+        )}
+
+        <input
+          ref={directoryInputRef}
+          type="file"
+          className="hidden"
+          multiple
+          webkitdirectory=""
+          directory=""
+          onChange={handleDirectoryInputChange}
+        />
+
+        {error ? (
+          <div className="card-minimal p-5 text-sm text-red-600">{error}</div>
+        ) : loading ? (
+          <LoadingSkeleton />
+        ) : filteredDownloads.length === 0 ? (
+          <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-surface)] p-10 text-center">
+            <p className="text-lg font-medium text-[var(--text-primary)] mb-1">No downloads</p>
+            <p className="text-sm text-[var(--text-secondary)] m-0">Downloaded files will appear here.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredDownloads.map(item => (
+              <div key={item.id} className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-surface)] p-4 flex items-center gap-4 shadow-sm">
+                <div className="w-10 h-10 rounded-md bg-[var(--bg-elevated)] border border-[var(--border-color)] flex items-center justify-center text-[var(--text-tertiary)] shrink-0">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6" />
+                  </svg>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <button
+                    onClick={() => openFile(item.savePath)}
+                    className="block text-left text-[var(--link-primary)] hover:underline font-medium truncate max-w-full"
+                    title={item.savePath || item.fileName}
+                  >
+                    {item.fileName || "Downloaded file"}
+                  </button>
+                  <p className="text-xs text-[var(--text-secondary)] mt-1 mb-0">
+                    {formatStatus(item)} - {formatTime(item.endTime || item.startTime)}
+                  </p>
+                  <p className="text-xs text-[var(--text-tertiary)] truncate mt-1 mb-0">{item.savePath || "Unknown location"}</p>
+                </div>
+                <button onClick={() => showInFolder(item.savePath)} className="p-2 rounded-full text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]" title="Show in folder" disabled={!item.savePath && !window.superBrowserDesktop?.downloads?.openFolder}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                  </svg>
+                </button>
+                <button onClick={() => openFile(item.savePath)} className="btn-secondary px-3 py-2 text-sm" disabled={!item.savePath}>
+                  Open
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SettingsModal({ theme, onToggleTheme, onClose }) {
+  useEffect(() => {
+    const handleKeyDown = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in-up" onClick={onClose}>
+      <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl p-6 border border-[var(--border-color)]" onClick={(e) => e.stopPropagation()}>
+        <div className="flex justify-between items-center pb-4 mb-4 border-b border-[var(--border-color)]">
+          <h3 className="text-lg font-semibold tracking-tight">Settings</h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)]"><XIcon /></button>
+        </div>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-[var(--text-primary)]">Theme</p>
+              <p className="text-xs text-[var(--text-secondary)]">Current theme: {theme}</p>
+            </div>
+            <button onClick={onToggleTheme} className="btn-secondary px-4 py-2 text-sm font-medium">Toggle theme</button>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-[var(--text-primary)]">Desktop mode</p>
+              <p className="text-xs text-[var(--text-secondary)]">{window.superBrowserDesktop?.isElectron ? 'Electron features enabled' : 'Web-only mode'}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FindInPageBox({ onClose }) {
+  const [query, setQuery] = useState("")
+  const [lastResult, setLastResult] = useState(null)
+  const inputRef = useRef(null)
+
+  const runFind = useCallback((forward = true) => {
+    const value = query.trim()
+    if (!value) return
+
+    const webview = document.querySelector('webview')
+    if (webview?.findInPage) {
+      const requestId = webview.findInPage(value, { forward, findNext: lastResult === value })
+      setLastResult(value)
+      return requestId
+    }
+
+    if (window.superBrowserDesktop?.app?.findInPage) {
+      window.superBrowserDesktop.app.findInPage(value, { forward, findNext: lastResult === value }).catch(() => { })
+      setLastResult(value)
+      return
+    }
+
+    if (typeof window.find === 'function') {
+      window.find(value, false, !forward, true, false, false, false)
+      setLastResult(value)
+    }
+  }, [query, lastResult])
+
+  const closeFind = useCallback(() => {
+    const webview = document.querySelector('webview')
+    webview?.stopFindInPage?.('clearSelection')
+    window.superBrowserDesktop?.app?.stopFindInPage?.().catch(() => { })
+    onClose()
+  }, [onClose])
+
+  useEffect(() => {
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+
+  useEffect(() => {
+    if (query.trim()) runFind(true)
+  }, [query, runFind])
+
+  return (
+    <div className="fixed top-[56px] right-4 z-[100] flex items-center gap-2 bg-white border border-[var(--border-color)] shadow-xl rounded-xl px-3 py-2 animate-fade-in-up">
+      <input
+        ref={inputRef}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') closeFind()
+          if (e.key === 'Enter') runFind(!e.shiftKey)
+        }}
+        placeholder="Find in page"
+        className="w-56 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-sm rounded-lg px-3 py-1.5 outline-none text-[var(--text-primary)]"
+      />
+      <button onClick={() => runFind(false)} className="btn-secondary px-2 py-1 text-sm" title="Previous match">Prev</button>
+      <button onClick={() => runFind(true)} className="btn-secondary px-2 py-1 text-sm" title="Next match">Next</button>
+      <button onClick={closeFind} className="p-1 rounded hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)]" title="Close find"><XIcon /></button>
+    </div>
+  )
+}
+
 function LoadingSkeleton() {
   return (
     <div className="max-w-4xl mx-auto space-y-4 animate-fade-in-up">
@@ -708,7 +2009,7 @@ function ResultsPanel({ mode, results, loading, onOpenLink, query }) {
   if (loading) return <LoadingSkeleton />
   if (!results) return null
   if (mode === 'seo') return <SEOResults results={results} onOpenLink={onOpenLink} query={query} />
-  if (mode === 'ai') return <AIResults results={results} />
+  if (mode === 'ai') return <AIResults results={results} onOpenLink={onOpenLink} />
   if (mode === 'community') return <Suspense fallback={<LoadingSkeleton />}><LazyCommunityResults results={results} onOpenLink={onOpenLink} /></Suspense>
   return null
 }
@@ -723,38 +2024,78 @@ function SEOResults({ results, onOpenLink, query = "" }) {
   return (
     <div className="space-y-6 max-w-3xl">
       {hasShoppingData && <ProductCarousel products={shoppingData} />}
-      {items.map((r, i) => (
-        <div key={i} className={`pb-6 mb-6 border-b border-[var(--border-color)] last:border-0 animate-fade-in-up stagger-${Math.min(i + 1, 3)}`}>
-          <div className="flex-1 min-w-0">
-            <a href={r.url} onClick={(e) => { e.preventDefault(); onOpenLink?.(r.url, r.title || "Search Result") }} className="font-medium text-[22px] block mb-1 text-[#1a0dab] hover:underline truncate hover:text-[#2b6ce0] transition-colors">{r.title}</a>
-            <p className="text-[13px] truncate mb-3 text-[#006621]">{r.url}</p>
-            <p className="text-[15px] text-[var(--text-secondary)] line-clamp-3 leading-relaxed">{r.snippet || r.description}</p>
+      {items.map((r, i) => {
+        const resultUrl = r.url || r.link || r.href || ""
+        const resultTitle = r.title || resultUrl || "Search Result"
+
+        return (
+          <div key={i} className={`pb-6 mb-6 border-b border-[var(--border-color)] last:border-0 animate-fade-in-up stagger-${Math.min(i + 1, 3)}`}>
+            <div className="flex-1 min-w-0">
+              <a
+                href={resultUrl || "#"}
+                onClick={(e) => {
+                  e.preventDefault()
+                  if (resultUrl) onOpenLink?.(resultUrl, resultTitle)
+                }}
+                className={`font-medium text-[22px] block mb-1 text-[#1a0dab] hover:underline truncate hover:text-[#2b6ce0] transition-colors ${!resultUrl ? 'pointer-events-none opacity-70' : ''}`}
+              >
+                {resultTitle}
+              </a>
+              {resultUrl && <p className="text-[13px] truncate mb-3 text-[#006621]">{resultUrl}</p>}
+              <p className="text-[15px] text-[var(--text-secondary)] line-clamp-3 leading-relaxed">{r.snippet || r.description}</p>
+            </div>
           </div>
-        </div>
-      ))}
-      {items.length > 0 && <ContinuousPaginationDemo totalPages={5} defaultPage={2} />}
+        )
+      })}
     </div>
   )
 }
 
-function AIResults({ AntiquatedResults }) {
-  const answer = AntiquatedResults?.answer || ''
-  const isLiveData = AntiquatedResults?.live_data === true
-  const sourceCount = AntiquatedResults?.sources_scraped || 0
+function AIResults({ results }) {
+  const answer = results?.answer || results?.response || ''
+  const isLiveData = results?.live_data === true
+  const sourceCount = results?.sources_scraped || 0
   return (
     <div className="max-w-3xl space-y-6 animate-fade-in-up">
       {answer ? (
-        <div className="p-8 bg-white border border-[var(--border-color)] rounded-3xl" style={{ borderTop: `4px solid ${isLiveData ? '#10b981' : 'var(--action-primary)'}` }}>
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-xl font-medium flex items-center gap-3"><BrainIcon /> AI Answer</h3>
-            {isLiveData && (
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-medium bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full border border-emerald-200">
-                <span>🌐</span> Powered by live web data {sourceCount > 0 && `(${sourceCount} sources)`}
-              </span>
-            )}
+        <>
+          <div className="p-8 bg-white border border-[var(--border-color)] rounded-3xl" style={{ borderTop: `4px solid ${isLiveData ? '#10b981' : 'var(--action-primary)'}` }}>
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-medium flex items-center gap-3"><BrainIcon /> AI Answer</h3>
+              {sourceCount > 0 && (
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-medium bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full border border-emerald-200">
+                  Powered by {isLiveData ? 'live web data' : 'SuperBrowser sources'} ({sourceCount} sources)
+                </span>
+              )}
+            </div>
+            <div className="leading-loose whitespace-pre-wrap text-[16px] text-[var(--text-primary)]">{answer}</div>
           </div>
-          <div className="leading-loose whitespace-pre-wrap text-[16px] text-[var(--text-primary)]">{answer}</div>
-        </div>
+          {sources.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-[var(--text-secondary)] uppercase tracking-wide">Sources</h3>
+              {sources.map((source, index) => {
+                const sourceUrl = source.url || source.link || source.href || ""
+                const sourceTitle = source.title || sourceUrl || "Source"
+                return (
+                  <div key={`${sourceUrl}-${index}`} className="pb-4 border-b border-[var(--border-color)] last:border-0">
+                    <a
+                      href={sourceUrl || "#"}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        if (sourceUrl) onOpenLink?.(sourceUrl, sourceTitle)
+                      }}
+                      className="font-medium text-[18px] block mb-1 text-[#1a0dab] hover:underline truncate"
+                    >
+                      {sourceTitle}
+                    </a>
+                    {sourceUrl && <p className="text-[13px] truncate mb-2 text-[#006621]">{sourceUrl}</p>}
+                    <p className="text-[14px] text-[var(--text-secondary)] line-clamp-2">{source.snippet || source.description}</p>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </>
       ) : <p className="text-[var(--text-secondary)] py-10">No AI results available.</p>}
     </div>
   )
@@ -808,59 +2149,11 @@ function PersonaDropdown({ value, onChange, personas }) {
   )
 }
 
-
-const MODELS = [
-  { id: "default",    name: "Llama 3.1 8B (Default)", desc: "Raw Groq — no persona" },
-  { id: "chatgpt",    name: "ChatGPT (GPT-4o)",       desc: "Helpful, concise, friendly & practical" },
-  { id: "gemini",     name: "Gemini 1.5 Pro",         desc: "Analytical & connect ideas broadly" },
-  { id: "claude",     name: "Claude 3.5 Sonnet",      desc: "Nuanced, careful & detailed analysis" },
-  { id: "perplexity", name: "Perplexity AI",          desc: "Factual, search-style & cited" }
-]
-
-function ModelDropdown({ value, onChange }) {
-  const [isOpen, setIsOpen] = useState(false)
-  const dropdownRef = useRef()
-  const selected = MODELS.find(m => m.id === value) || MODELS[0]
-
-  useEffect(() => {
-    const handler = (e) => { if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setIsOpen(false) }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
-
-  return (
-    <div ref={dropdownRef} className="relative">
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="pill-btn px-4 py-1.5 flex items-center gap-2 min-w-[140px] justify-between"
-      >
-        <span>{selected.name}</span>
-        <ChevronDownIcon />
-      </button>
-      {isOpen && (
-        <div className="absolute top-full left-0 mt-2 w-64 bg-[var(--bg-surface)] border border-[var(--border-color)] rounded-xl shadow-lg py-2 z-50 animate-fade-in-up">
-          {MODELS.map(m => (
-            <button
-              key={m.id}
-              onClick={() => { onChange(m.id); setIsOpen(false) }}
-              className={`w-full text-left px-4 py-2 hover:bg-[var(--bg-hover)] transition-colors flex flex-col ${value === m.id ? 'bg-[rgba(50,121,249,0.05)]' : ''}`}
-            >
-              <span className={`text-xs font-semibold ${value === m.id ? 'text-[var(--action-primary)]' : 'text-[var(--text-primary)]'}`}>{m.name}</span>
-              <span className="text-[10px] text-[var(--text-tertiary)]">{m.desc}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-
 function ContextWindow({ show, onClose, tabId, sessionId, contextManager }) {
   const [chatMessages, setChatMessages] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [models, setModels] = useState([])
-  const [selectedModel, setSelectedModel] = useState('default')
+  const [selectedModel, setSelectedModel] = useState('llama-3.1-8b-instant')
   const [showModelSelector, setShowModelSelector] = useState(false)
   const modelSelectorRef = useRef(null)
 
@@ -871,7 +2164,7 @@ function ContextWindow({ show, onClose, tabId, sessionId, contextManager }) {
         .then(data => {
           if (data.models) {
             setModels(data.models)
-            setSelectedModel(data.default || 'default')
+            setSelectedModel(data.default || 'llama-3.1-8b-instant')
           }
         })
         .catch(() => { })
@@ -892,7 +2185,7 @@ function ContextWindow({ show, onClose, tabId, sessionId, contextManager }) {
 
   if (!show) return null
 
-  const currentModel = models.find(m => m.id === selectedModel) || { name: 'Llama 3.1 8B (Default)', id: selectedModel }
+  const currentModel = models.find(m => m.id === selectedModel) || { name: 'Llama 3.1 8B', id: selectedModel }
 
   const handleSend = async (text, modelId) => {
     const userMsg = { id: Date.now().toString(), text, sender: 'user' }
@@ -1002,53 +2295,171 @@ function ContextWindow({ show, onClose, tabId, sessionId, contextManager }) {
 
 function BackendStatusBanner() { return null }
 
-function BrowserPanel({ url, title, onClose }) {
-  const webviewRef = useRef(null)
+function PagePreview({ url, title, onRetryBrowser }) {
+  const [preview, setPreview] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
 
-  // SEC-02: Block non-http(s) navigations inside the webview
   useEffect(() => {
-    const webview = webviewRef.current
-    if (!webview) return
+    let cancelled = false
+    setLoading(true)
+    setError("")
+    setPreview(null)
 
-    const handleWillNavigate = (e) => {
-      try {
-        const parsed = new URL(e.url)
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-          console.warn('[SuperBrowser] webview blocked navigation to:', parsed.protocol, e.url)
-          e.preventDefault()
-        }
-      } catch {
-        console.warn('[SuperBrowser] webview blocked malformed navigation URL:', e.url)
-        e.preventDefault()
-      }
+    fetch(`${API_BASE}/api/page/preview?url=${encodeURIComponent(url)}`)
+      .then(response => {
+        if (!response.ok) throw new Error(`Preview failed with ${response.status}`)
+        return response.json()
+      })
+      .then(data => {
+        if (!cancelled) setPreview(data)
+      })
+      .catch(() => {
+        if (!cancelled) setError("This page cannot be previewed inside SuperBrowser.")
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
     }
-
-    webview.addEventListener('will-navigate', handleWillNavigate)
-    return () => webview.removeEventListener('will-navigate', handleWillNavigate)
   }, [url])
 
-  const reloadWebview = () => webviewRef.current?.reload()
+  return (
+    <div className="flex-1 min-h-0 overflow-auto bg-white">
+      <div className="max-w-4xl mx-auto px-6 py-8">
+        <div className="flex flex-wrap items-center gap-2 mb-5 no-print">
+          {onRetryBrowser && (
+            <button
+              type="button"
+              onClick={onRetryBrowser}
+              className="px-3 py-1.5 text-sm rounded-lg border border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+            >
+              Try browser view
+            </button>
+          )}
+        </div>
+
+        {loading ? (
+          <LoadingSkeleton />
+        ) : error ? (
+          <div className="border border-[var(--border-color)] rounded-2xl p-8 bg-[var(--bg-elevated)]">
+            <h2 className="text-2xl font-semibold mb-3 text-[var(--text-primary)]">{title || "Page preview unavailable"}</h2>
+            <p className="text-[var(--text-secondary)] mb-5">{error}</p>
+            <p className="text-sm text-[var(--text-tertiary)] break-all">{url}</p>
+          </div>
+        ) : (
+          <article className="space-y-5">
+            <p className="text-sm text-[#006621] break-all">{preview?.url || url}</p>
+            <h1 className="text-4xl font-semibold tracking-normal text-[var(--text-primary)]">{preview?.title || title || "Page preview"}</h1>
+            {preview?.description && (
+              <p className="text-lg leading-relaxed text-[var(--text-secondary)]">{preview.description}</p>
+            )}
+            <div className="space-y-4 pt-2">
+              {(preview?.content || []).length > 0 ? (
+                preview.content.map((paragraph, index) => (
+                  <p key={`${url}-${index}`} className="text-[16px] leading-8 text-[var(--text-primary)]">
+                    {paragraph}
+                  </p>
+                ))
+              ) : (
+                <p className="text-[var(--text-secondary)]">No readable page content was found.</p>
+              )}
+            </div>
+          </article>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function BrowserPanel({ url, title, onClose }) {
+  const isElectron = Boolean(window.superBrowserDesktop?.isElectron)
+  const [frameKey, setFrameKey] = useState(0)
+  const [showPreview, setShowPreview] = useState(false)
+  const webviewRef = useRef(null)
+
+  useEffect(() => {
+    setShowPreview(false)
+  }, [isElectron, url])
+
+  useEffect(() => {
+    if (!isElectron || showPreview || !webviewRef.current) return
+    const webview = webviewRef.current
+    const handleFailedLoad = (event) => {
+      if (event?.isMainFrame === false) return
+      if (event?.errorCode === -3) return
+      setShowPreview(true)
+    }
+    const handleNewWindow = (event) => {
+      const nextUrl = event?.url
+      if (!nextUrl || nextUrl === url) return
+      event.preventDefault?.()
+      webview.loadURL?.(nextUrl)
+    }
+    webview.addEventListener("did-fail-load", handleFailedLoad)
+    webview.addEventListener("new-window", handleNewWindow)
+    return () => {
+      webview.removeEventListener("did-fail-load", handleFailedLoad)
+      webview.removeEventListener("new-window", handleNewWindow)
+    }
+  }, [isElectron, showPreview, frameKey, url])
+
+  const reloadPage = () => {
+    if (isElectron) {
+      if (showPreview) {
+        setFrameKey(key => key + 1)
+        return
+      }
+      webviewRef.current?.reload()
+      return
+    }
+    setFrameKey(key => key + 1)
+  }
 
   return (
     <div className="h-full flex flex-col bg-white animate-fade-in-up">
-      <div className="px-4 py-2 border-b border-[var(--border-color)] flex items-center gap-3">
+      <div className="no-print px-4 py-2 border-b border-[var(--border-color)] flex items-center gap-3">
         <div className="flex items-center gap-1 relative">
           <button onClick={onClose} className="p-1.5 rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Back"><ChevronLeftIcon /></button>
-          <button onClick={reloadWebview} className="p-1.5 rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors" title="Reload"><RefreshIcon /></button>
+          <button disabled className="p-1.5 rounded-full text-[var(--text-secondary)] opacity-30 cursor-not-allowed transition-colors" title="Forward"><ChevronRightIcon /></button>
+          <button onClick={reloadPage} className="p-1.5 rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Reload"><RefreshIcon /></button>
           <ShieldsPanel url={url} webviewRef={webviewRef} />
         </div>
         <input value={url} readOnly className="flex-1 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-sm rounded-lg px-3 py-1.5 outline-none text-[var(--text-secondary)]" />
       </div>
-      {/* SEC-02: allowpopups removed; popups are blocked at process level in main.cjs */}
-      <webview
-        ref={webviewRef}
-        id={`webview-${url}`}
-        src={url}
-        partition="persist:superbrowser"
-        preload={window.superBrowserDesktop?.webviewPreloadPath}
-        className="w-full flex-1"
-        style={{ minHeight: 0 }}
-      />
+      {showPreview ? (
+        <PagePreview
+          key={`${url}-${frameKey}`}
+          url={url}
+          title={title}
+          onRetryBrowser={isElectron ? () => setShowPreview(false) : null}
+        />
+      ) : isElectron ? (
+        <webview
+          ref={webviewRef}
+          data-active-browser-view="true"
+          id={`webview-${url}`}
+          src={url}
+          partition="persist:superbrowser"
+          preload={window.superBrowserDesktop?.webviewPreloadPath}
+          className="w-full flex-1"
+          style={{ minHeight: 0 }}
+          /* SEC-02: allowpopups removed; popups are blocked at process level in main.cjs */
+        />
+      ) : (
+        <iframe
+          data-active-browser-view="true"
+          key={frameKey}
+          title={title || url}
+          src={url}
+          className="w-full flex-1 border-0 bg-white"
+          style={{ minHeight: 0 }}
+          sandbox="allow-downloads allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+          referrerPolicy="strict-origin-when-cross-origin"
+        />
+      )}
     </div>
   )
 }
@@ -1135,19 +2546,73 @@ function PricingPage({ onClose }) {
   )
 }
 
-function BrowserMenu({ onClose, onAddTab, onShowHistory, onOpenPricing }) {
-  const menuRef = useRef()
-  const [zoomLevel, setZoomLevel] = useState(100)
-
-  useEffect(() => {
-    const handler = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) onClose() }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [onClose])
+function BrowserMenu({
+  onClose,
+  onAddTab,
+  onNewWindow,
+  onNewIncognitoWindow,
+  onShowHistory,
+  onOpenPricing,
+  onOpenDownloads,
+  onOpenBookmarks,
+  onOpenExtensions,
+  onDeleteBrowsingData,
+  onFindInPage,
+  onPrint,
+  onOpenSettings,
+  isIncognito,
+  onWipeWorkspace
+}) {
+  const [zoomLevel, setZoomLevel] = useState(() => Number(document.documentElement.dataset.zoomLevel) || 100)
+  const isElectron = Boolean(window.superBrowserDesktop?.isElectron)
 
   const handleAction = (action) => {
-    action?.()
     onClose()
+    window.setTimeout(() => action?.(), 80)
+  }
+
+  const handleNewTabFromMenu = (event) => {
+    event?.preventDefault?.()
+    event?.stopPropagation?.()
+    onAddTab?.()
+    onClose()
+  }
+
+  const applyZoom = (nextZoom) => {
+    const clampedZoom = Math.min(200, Math.max(25, nextZoom))
+    document.documentElement.style.zoom = `${clampedZoom}%`
+    document.documentElement.dataset.zoomLevel = String(clampedZoom)
+    setZoomLevel(clampedZoom)
+  }
+
+  const toggleFullscreen = () => {
+    if (window.superBrowserDesktop?.app?.toggleFullscreen) {
+      window.superBrowserDesktop.app.toggleFullscreen().catch(() => { })
+      return
+    }
+    if (document.fullscreenElement) document.exitFullscreen?.()
+    else document.documentElement.requestFullscreen?.()
+  }
+
+  const openHelp = () => {
+    const helpUrl = 'https://github.com/'
+    if (window.superBrowserDesktop?.app?.openExternal) {
+      window.superBrowserDesktop.app.openExternal(helpUrl).catch(() => { })
+      return
+    }
+    window.open(helpUrl, '_blank', 'noopener,noreferrer')
+  }
+
+  const exitApp = () => {
+    if (window.superBrowserDesktop?.app?.quit) {
+      window.superBrowserDesktop.app.quit().catch(() => { })
+      return
+    }
+    window.open('', '_self')
+    window.close()
+    window.setTimeout(() => {
+      if (!window.closed) window.location.replace('about:blank')
+    }, 120)
   }
 
   const icons = {
@@ -1180,7 +2645,17 @@ function BrowserMenu({ onClose, onAddTab, onShowHistory, onOpenPricing }) {
 
   const MenuItem = ({ icon, label, shortcut, rightIcon, onClick, disabled }) => (
     <button
-      onClick={() => !disabled && handleAction(onClick)}
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        if (!disabled) handleAction(onClick)
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.preventDefault()
+        e.stopPropagation()
+        if (!disabled) handleAction(onClick)
+      }}
       disabled={disabled}
       className={`w-full flex items-center px-4 py-1.5 text-[13px] hover:bg-[var(--bg-hover)] group transition-colors ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
     >
@@ -1192,14 +2667,13 @@ function BrowserMenu({ onClose, onAddTab, onShowHistory, onOpenPricing }) {
   )
 
   const ProfileMenu = () => (
-    <div className="px-3 py-2 flex items-center bg-[var(--bg-elevated)] mx-2 my-1.5 rounded-lg border border-[var(--border-color)] hover:border-gray-300 transition-colors cursor-pointer group">
+    <button disabled className="w-[calc(100%-1rem)] px-3 py-2 flex items-center bg-[var(--bg-elevated)] mx-2 my-1.5 rounded-lg border border-[var(--border-color)] opacity-50 cursor-not-allowed">
       <div className="w-7 h-7 bg-[var(--border-color)] rounded-full flex items-center justify-center text-[var(--text-secondary)] mr-3">
         {icons.user}
       </div>
       <span className="text-[13px] text-[var(--text-primary)] flex-1 text-left font-medium">Your Browser</span>
       <span className="text-[11px] bg-[rgba(50,121,249,0.1)] text-[#3279f9] px-2 py-0.5 rounded-md font-medium border border-[rgba(50,121,249,0.2)]">Not signed in</span>
-      <span className="text-[var(--text-tertiary)] ml-2 text-xs opacity-0 group-hover:opacity-100 transition-opacity">▶</span>
-    </div>
+    </button>
   )
 
   const ZoomControl = () => (
@@ -1207,61 +2681,71 @@ function BrowserMenu({ onClose, onAddTab, onShowHistory, onOpenPricing }) {
       <span className="text-[var(--text-tertiary)] mr-3">{icons.zoom}</span>
       <span className="text-[var(--text-primary)] flex-1 text-left">Zoom</span>
       <div className="flex items-center ml-4 border border-[var(--border-color)] rounded-md overflow-hidden bg-white">
-        <button onClick={() => setZoomLevel(z => Math.max(25, z - 10))} className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">−</button>
+        <button onClick={() => applyZoom(zoomLevel - 10)} className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">−</button>
         <div className="w-[1px] h-4 bg-[var(--border-color)]"></div>
         <span className="px-2 text-[12px] font-medium text-[var(--text-primary)] min-w-[40px] text-center">{zoomLevel}%</span>
         <div className="w-[1px] h-4 bg-[var(--border-color)]"></div>
-        <button onClick={() => setZoomLevel(z => Math.min(200, z + 10))} className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">+</button>
+        <button onClick={() => applyZoom(zoomLevel + 10)} className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">+</button>
       </div>
-      <button onClick={() => document.documentElement.requestFullscreen?.()} className="ml-3 p-1 rounded-md border border-[var(--border-color)] bg-white hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]">
+      <button onClick={toggleFullscreen} className="ml-3 p-1 rounded-md border border-[var(--border-color)] bg-white hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]">
         {icons.fullscreen}
       </button>
     </div>
   )
 
   return (
-    <div ref={menuRef} className="absolute top-[44px] right-0 w-[300px] bg-white border border-[var(--border-color)] shadow-2xl rounded-bl-xl py-1 z-50 animate-fade-in-up origin-top-right">
-      <MenuItem icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>} label="New tab" shortcut="Ctrl+T" onClick={onAddTab} />
-      <MenuItem 
-  icon={icons.window} 
-  label="New window" 
-  shortcut="Ctrl+N" 
-  onClick={() => window.electronAPI?.send('open-new-window')} 
-/>
-      <MenuItem 
-  icon={icons.incognito} 
-  label="New Incognito window" 
-  shortcut="Ctrl+Shift+N" 
-  onClick={() => window.electronAPI?.send('open-incognito-window')} 
-/>
+    <div
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      className="browser-menu no-print absolute top-[44px] right-0 w-[300px] bg-white border border-[var(--border-color)] shadow-2xl rounded-bl-xl py-1 z-50 animate-fade-in-up origin-top-right"
+    >
+      <button
+        type="button"
+        onMouseDown={handleNewTabFromMenu}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          handleNewTabFromMenu(event)
+        }}
+        className="w-full flex items-center px-4 py-1.5 text-[13px] hover:bg-[var(--bg-hover)] group transition-colors"
+      >
+        <span className="text-[var(--text-tertiary)] mr-3">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="12" y1="8" x2="12" y2="16" /><line x1="8" y1="12" x2="16" y2="12" /></svg>
+        </span>
+        <span className="text-[var(--text-primary)] flex-1 text-left">New tab</span>
+        <span className="text-[#9aa0a6] text-[11px] font-medium ml-4">Ctrl+T</span>
+      </button>
+      <MenuItem icon={icons.window} label="New window" shortcut="Ctrl+N" onClick={onNewWindow} />
+      <MenuItem icon={icons.incognito} label="New Incognito window" shortcut="Ctrl+Shift+N" onClick={onNewIncognitoWindow} />
+
       {divider}
       <ProfileMenu />
       {divider}
 
       <MenuItem icon={icons.key} label="Passwords and autofill" rightIcon="▶" disabled />
-      <MenuItem icon={icons.history} label="History" onClick={onShowHistory} />
-      <MenuItem icon={icons.download} label="Downloads" shortcut="Ctrl+J" disabled />
-      <MenuItem icon={icons.star} label="Bookmarks and lists" rightIcon="▶" disabled />
+      <MenuItem icon={icons.history} label={isIncognito ? "History off in Incognito" : "History"} onClick={onShowHistory} disabled={isIncognito} />
+      <MenuItem icon={icons.download} label="Downloads" shortcut="Ctrl+J" onClick={onOpenDownloads} />
+      <MenuItem icon={icons.star} label="Bookmarks and lists" rightIcon="▶" onClick={onOpenBookmarks} />
       <MenuItem icon={icons.grid} label="Tab groups" rightIcon="▶" disabled />
-      <MenuItem icon={icons.puzzle} label="Extensions" rightIcon="▶" disabled />
-      <MenuItem icon={icons.trash} label="Delete browsing data..." shortcut="Ctrl+Shift+Del" disabled />
+      <MenuItem icon={icons.puzzle} label="Extensions" rightIcon="▶" onClick={onOpenExtensions} />
+      <MenuItem icon={icons.trash} label="Delete browsing data..." shortcut="Ctrl+Shift+Del" onClick={onDeleteBrowsingData} />
 
       {divider}
       <ZoomControl />
       {divider}
 
-      <MenuItem icon={icons.print} label="Print..." shortcut="Ctrl+P" onClick={() => window.print()} />
+      <MenuItem icon={icons.print} label="Print..." shortcut="Ctrl+P" onClick={onPrint} />
       <MenuItem icon={icons.lens} label="Search with Google Lens" disabled />
       <MenuItem icon={icons.translate} label="Translate..." disabled />
-      <MenuItem icon={icons.find} label="Find in page" shortcut="Ctrl+F" disabled />
+      <MenuItem icon={icons.find} label="Find in page" shortcut="Ctrl+F" onClick={onFindInPage} />
       <MenuItem icon={icons.cast} label="Cast, save, and share" rightIcon="▶" disabled />
       <MenuItem icon={icons.briefcase} label="More tools" rightIcon="▶" disabled />
 
       {divider}
-      <MenuItem icon={icons.help} label="Help" onClick={() => window.open('https://github.com', '_blank')} />
+      <MenuItem icon={icons.help} label="Help" onClick={openHelp} />
       <MenuItem icon={icons.pricing} label="Pricing" onClick={onOpenPricing} />
-      <MenuItem icon={icons.settings} label="Settings" disabled />
-      <MenuItem icon={icons.exit} label="Exit" onClick={() => window.superBrowserDesktop?.close?.() || window.close()} />
+      <MenuItem icon={icons.settings} label="Settings" onClick={onOpenSettings} />
+      <MenuItem icon={icons.trash} label="Wipe Workspace" onClick={onWipeWorkspace} />
+      <MenuItem icon={icons.exit} label="Exit" onClick={exitApp} />
     </div>
   )
 }

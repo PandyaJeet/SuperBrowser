@@ -1,7 +1,9 @@
 import asyncio
+import os
 from typing import Dict, Optional
 
 from services.groq_service import ask_groq
+from services.instant_results import create_instant_ai_response
 from services.personas import get_persona
 from services.query_classifier import classify_query
 
@@ -252,6 +254,9 @@ async def get_ai_consensus(
     """Get AI-generated consensus answer using the specified persona and browsing context."""
     normalized_persona = (persona or "default").strip().lower()
     persona_config = get_persona(normalized_persona)
+
+    if not os.getenv("GROQ_API_KEY"):
+        return create_instant_ai_response(query, persona=normalized_persona, gl=gl)
     
     # ─── Step 1: Classify the query ───────────────────────────────
     query_category = await classify_query(query)
@@ -273,6 +278,9 @@ async def get_ai_consensus(
                 model=selected_model,
                 system_prompt=LIVE_DATA_SYSTEM_PROMPT,
             )
+
+            if not answer or answer.startswith("Groq API"):
+                return create_instant_ai_response(query, persona=normalized_persona, gl=gl)
 
             return {
                 "query": query,
@@ -309,6 +317,9 @@ async def get_ai_consensus(
         model=selected_model,
         system_prompt=system_prompt,
     )
+
+    if not answer or answer.startswith("Groq API"):
+        return create_instant_ai_response(query, persona=normalized_persona, gl=gl)
 
     return {
         "query": query,

@@ -12,7 +12,7 @@ async def scrape_duckduckgo(query: str) -> list[dict]:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             response = await client.get(url, params={"q": query}, headers=headers)
             response.raise_for_status()
     except (httpx.RequestError, httpx.HTTPStatusError):
