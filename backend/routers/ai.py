@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Optional
 
 from services.super_ai import get_ai_consensus
+from utils.sanitize import sanitize_query
 
 router = APIRouter()
 
@@ -39,6 +40,7 @@ class AIResponse(BaseModel):
 )
 async def get_ai(q: str, session_id: str = "", persona: str = "default", gl: str = "us", model: str = "llama-3.1-8b-instant"):
     """Legacy endpoint for backward compatibility"""
+    q = sanitize_query(q)
     return await get_ai_consensus(query=q, persona=persona, gl=gl, model=model)
 
 
@@ -53,8 +55,9 @@ async def get_ai_with_context(request: ContextualAIRequest):
     AI endpoint with browsing context support
     Accepts: query, persona, browsing context, and model
     """
+    query = sanitize_query(request.query)
     return await get_ai_consensus(
-        query=request.query,
+        query=query,
         persona=request.persona,
         context=request.context,
         gl=request.region,
