@@ -86,6 +86,7 @@ class SessionStats(BaseModel):
 
 class SessionInfo(BaseModel):
     session_id: str
+    secret: Optional[str] = None
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
     status: Optional[str] = None
@@ -213,6 +214,7 @@ def _ensure_session(session_id: str) -> None:
     if session_id not in _session_store:
         _session_store[session_id] = {
             "session_id": session_id,
+            "secret": secrets.token_urlsafe(32),
             "started_at": _utc_now_iso(),
             "ended_at": None,
             "status": "active",
@@ -280,7 +282,7 @@ def _build_context_summary(session_id: str) -> str:
     "/context/session/start",
     response_model=SessionResponse,
     summary="Start a context session",
-    description="Starts a new session or resumes an existing one using the provided session ID."
+    description="Starts a new session or resumes an existing one using the provided session ID. Returns session secret for access control."
 )
 async def start_session(session_id: str = Body(..., embed=True)):
     _ensure_session(session_id)
@@ -288,7 +290,9 @@ async def start_session(session_id: str = Body(..., embed=True)):
     if session.get("status") != "active":
         session["status"] = "active"
         session["ended_at"] = None
-    return {"status": "success", "session": session, "stats": _session_stats(session_id)}
+
+    session_response = session.copy()
+    return {"status": "success", "session": session_response, "stats": _session_stats(session_id)}
 
 
 @router.post(
@@ -319,7 +323,7 @@ async def stop_session(session_id: str):
     summary="Export session context",
     description="Exports all browsing context for a session including queries, results, and visited pages as a JSON payload."
 )
-async def export_session_context(session_id: str):
+async def export_session_context(session_id: str, x_session_secret: str = Header(default="")):
     if session_id not in _session_store and session_id not in _context_store:
         return {
             "status": "not_found",
@@ -328,11 +332,20 @@ async def export_session_context(session_id: str):
             "tabs": {},
             "stats": {"tab_count": 0, "query_count": 0, "result_count": 0, "visited_count": 0},
         }
+
     _ensure_session(session_id)
+    session = _session_store[session_id]
+
+    if not secrets.compare_digest(session.get("secret", ""), x_session_secret):
+        raise HTTPException(status_code=403, detail="Forbidden: invalid session secret")
+
+    session_response = session.copy()
+    session_response.pop("secret", None)
+
     return {
         "status": "success",
         "session_id": session_id,
-        "session": _session_store[session_id],
+        "session": session_response,
         "tabs": _context_store.get(session_id, {}),
         "stats": _session_stats(session_id),
     }
@@ -381,16 +394,25 @@ async def get_context(session_id: str, tab_id: str):
     summary="Get full session context",
     description="Returns all browsing context across all tabs for a given session."
 )
-async def get_session_context(session_id: str):
+async def get_session_context(session_id: str, x_session_secret: str = Header(default="")):
     if session_id not in _context_store and session_id not in _session_store:
         return {
             "session": None,
             "tabs": {},
             "stats": {"tab_count": 0, "query_count": 0, "result_count": 0, "visited_count": 0},
         }
+
     _ensure_session(session_id)
+    session = _session_store[session_id]
+
+    if not secrets.compare_digest(session.get("secret", ""), x_session_secret):
+        raise HTTPException(status_code=403, detail="Forbidden: invalid session secret")
+
+    session_response = session.copy()
+    session_response.pop("secret", None)
+
     return {
-        "session": _session_store[session_id],
+        "session": session_response,
         "tabs": _context_store.get(session_id, {}),
         "stats": _session_stats(session_id),
     }
