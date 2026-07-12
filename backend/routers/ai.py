@@ -7,7 +7,7 @@ from services.super_ai import get_ai_consensus
 router = APIRouter()
 
 
-# ── Request Model ──────────────────────────────────────────
+# ── Request Model ──────────────────────────────────────────────────────────────
 class ContextualAIRequest(BaseModel):
     """Request model for AI queries with context"""
     query: str
@@ -17,7 +17,7 @@ class ContextualAIRequest(BaseModel):
     model: Optional[str] = "llama-3.1-8b-instant"
 
 
-# ── Response Models ───────────────────────────────────────
+# ── Response Models ────────────────────────────────────────────────────────────
 class AISource(BaseModel):
     title: Optional[str] = None
     url: Optional[str] = None
@@ -28,9 +28,10 @@ class AIResponse(BaseModel):
     sources: Optional[List[AISource]] = []
     persona: Optional[str] = None
     region: Optional[str] = None
+    context_stats: Optional[Dict] = None
 
 
-# ── Endpoints ───────────────────────────────────────────────
+# ── Endpoints ──────────────────────────────────────────────────────────────────
 @router.get(
     "/ai",
     response_model=AIResponse,
