@@ -1,6 +1,7 @@
 import asyncio
 import os
 from typing import Dict, Optional
+from utils.url_normalizer import deduplicate_results
 
 from services.groq_service import ask_groq
 from services.instant_results import create_instant_ai_response
@@ -156,17 +157,11 @@ async def _scrape_all_engines(query: str, gl: str = "us") -> list[dict]:
         elif isinstance(engine_results, Exception):
             print(f"[live_data] scraper exception: {engine_results}")
 
-    # Deduplicate by URL
-    seen_urls = set()
-    deduplicated = []
-    for result in all_results:
-        url = result.get("url", "")
-        if url and url not in seen_urls:
-            seen_urls.add(url)
-            deduplicated.append(result)
+    # Apply URL normalization-based deduplication before returning
+    all_results = deduplicate_results(all_results)
 
-    print(f"[live_data] total scraped: {len(all_results)}, after dedup: {len(deduplicated)} (region: {gl})")
-    return deduplicated
+    print(f"[live_data] total scraped: {len(all_results)}, after dedup: {len(all_results)} (region: {gl})")
+    return all_results
 
 
 async def _scrape_with_api_fallback(query: str, engine: str, gl: str = "us") -> list[dict]:
