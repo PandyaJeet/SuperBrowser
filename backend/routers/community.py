@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 from typing import Optional, List
+from pydantic import BaseModel
 
 from services.community_summarizer import get_community_insights
 from utils.cache import cache_key, get_cached, set_cached

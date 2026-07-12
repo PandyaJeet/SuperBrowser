@@ -1,6 +1,7 @@
 import asyncio
 import os
 from typing import Dict, Optional
+from utils.url_normalizer import deduplicate_results
 
 from services.groq_service import ask_groq
 from services.instant_results import create_instant_ai_response
