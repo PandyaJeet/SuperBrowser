@@ -3,10 +3,41 @@ import asyncio
 
 import httpx
 
+from email.utils import parsedate_to_datetime
+from datetime import datetime, timezone
+
 
 MAX_RETRIES = 5
 INITIAL_BACKOFF = 1.0  # seconds
 
+
+def parse_retry_after(
+    header_value: str | None,
+    fallback: float
+) -> float:
+    
+    if not header_value:
+        return fallback
+    
+    try:
+        # First, interpret the header as a delay in seconds.
+        delay = float(header_value)
+        return max(delay, 0.0)
+    except ValueError:
+        pass
+
+    try:
+        # If not numeric, fall back to parsing the HTTP-date format.
+        retry_time = parsedate_to_datetime(header_value)
+        
+        if retry_time.tzinfo is None:
+            retry_time = retry_time.replace(tzinfo=timezone.utc)
+
+        delay = (retry_time - datetime.now(timezone.utc)).total_seconds()
+        return max(delay, 0.0)
+    
+    except ValueError:
+        return fallback
 
 async def ask_groq(
     prompt: str | None = None,
@@ -58,7 +89,7 @@ async def ask_groq(
                 
                 # Handle rate limiting with retry
                 if response.status_code == 429:
-                    retry_after = float(response.headers.get("retry-after", backoff))
+                    retry_after = parse_retry_after(response.headers.get("retry-after"), backoff)
                     print(f"[groq] Rate limited (429), retrying in {retry_after:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})")
                     await asyncio.sleep(retry_after)
                     backoff = min(backoff * 2, 30)  # Exponential backoff, max 30s
