@@ -89,6 +89,7 @@ async def ask_groq(
                 
                 # Handle rate limiting with retry
                 if response.status_code == 429:
+                    # Retry-After may be either a delay in seconds or an HTTP-date.
                     retry_after = parse_retry_after(response.headers.get("retry-after"), backoff)
                     print(f"[groq] Rate limited (429), retrying in {retry_after:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})")
                     await asyncio.sleep(retry_after)
