@@ -21,6 +21,7 @@ from services.serpapi_search import (
 from services.instant_results import create_instant_results
 
 from utils.cache import cache_key, get_cached, set_cached
+from utils.sanitize import sanitize_query
 
 
 router = APIRouter()
@@ -195,6 +196,7 @@ async def get_seo(q: str = Query(default=None)):
             content={"error": "query param q is required"}
         )
 
+    q = sanitize_query(q)
     key = cache_key(q, "all", "seo-v4")
     cached = get_cached(key)
     if cached is not None:

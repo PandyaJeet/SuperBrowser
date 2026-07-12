@@ -2,8 +2,9 @@
  * Context Manager Hook
  * Manages browsing context for each tab - tracks queries, results, and visited pages
  */
-import { useCallback, useMemo, useRef } from 'react'
+import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react'
 import { getApiBase } from './config/apiBase'
+
 
 const API_BASE = getApiBase()
 
@@ -15,6 +16,8 @@ const getSessionToken = () => {
 export function useContextManager() {
   // In-memory context storage per tab
   const contextStore = useRef({});
+
+  onst [contextRestored, setContextRestored] = React.useState(false);
 
   // Initialize context for a tab
   const initializeTab = useCallback((tabId, sessionId) => {
@@ -197,6 +200,41 @@ export function useContextManager() {
     return res.json();
   }, []);
 
+  useEffect(() => {
+  // This would need to be called from a component with actual tabId/sessionId
+  // For now, we'll expose the function and let components handle it
+  // This is a placeholder - the actual loading happens in the component
+}, []);
+
+// Better approach: Add a loadContext function that components can call
+const loadContext = useCallback(async (tabId, sessionId) => {
+  if (!tabId || !sessionId) return;
+  
+  try {
+    const data = await fetchTabContext(tabId, sessionId);
+    if (data && (data.queries?.length > 0 || data.visited_pages?.length > 0)) {
+      // Populate the context store
+      if (!contextStore.current[tabId]) {
+        contextStore.current[tabId] = {
+          sessionId,
+          queries: [],
+          results: [],
+          visited_pages: []
+        };
+      }
+      contextStore.current[tabId].queries = data.queries || [];
+      contextStore.current[tabId].results = data.results || [];
+      contextStore.current[tabId].visited_pages = data.visited_pages || [];
+      
+      // Show the restoration indicator
+      setContextRestored(true);
+      setTimeout(() => setContextRestored(false), 4000);
+    }
+  } catch (err) {
+    console.warn('Could not load context:', err);
+  }
+}, [fetchTabContext]);
+
   const fetchSessionContext = useCallback(async (sessionId) => {
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.getSession) {
       try {
@@ -267,7 +305,9 @@ export function useContextManager() {
     fetchTabContext,
     fetchSessionContext,
     wipeWorkspace,
-    downloadSessionContext
+    downloadSessionContext,
+    loadContext,
+    contextRestored
   }), [
     startSession,
     stopSession,
@@ -281,7 +321,9 @@ export function useContextManager() {
     getContextSummary,
     fetchTabContext,
     fetchSessionContext,
-    downloadSessionContext
+    downloadSessionContext,
+    loadContext,
+    contextRestored
   ]);
 }
 

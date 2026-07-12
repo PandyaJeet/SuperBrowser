@@ -1,6 +1,8 @@
 import os
 import sys
 from pathlib import Path
+from utils.context_persistence import load_all_contexts
+from routers import pages  # ← This might already exist, check if it's missing
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -45,6 +47,28 @@ app.include_router(community.router, prefix="/api/search", tags=["Community"], d
 app.include_router(context.router, prefix="/api", tags=["Context"])
 app.include_router(pages.router, prefix="/api", tags=["Pages"])
 
+# ADD THIS:
+@app.on_event("startup")
+async def load_persisted_contexts():
+    """
+    On startup, load any contexts that were persisted to disk
+    from a previous server run. This ensures users returning after
+    a Render sleep find their research sessions intact.
+    """
+    persisted = load_all_contexts()
+    if persisted:
+        # Import _context_store from context module
+        from routers.context import _context_store
+        for session_id, tabs in persisted.items():
+            for tab_id, context_data in tabs.items():
+                # Populate the in-memory store with persisted data
+                if session_id not in _context_store:
+                    _context_store[session_id] = {}
+                _context_store[session_id][tab_id] = context_data
+        total_tabs = sum(len(tabs) for tabs in persisted.values())
+        print(f"[Startup] Restored {total_tabs} tab context(s) from disk.")
+    else:
+        print("[Startup] No persisted contexts to restore.")
 
 @app.get("/")
 async def root():

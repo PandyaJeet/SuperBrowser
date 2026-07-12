@@ -6,6 +6,8 @@ const LazyCommunityResults = lazy(() => import('./components/CommunityResults'))
 const LazyBackgroundOrb = lazy(() => import('./components/BackgroundOrb'))
 import { AiInput } from './components/AiInput'
 import { ProductCarousel } from './components/ProductCarousel'
+import ShieldsPanel from './components/ShieldsPanel'
+
 
 const PERSONAS = [
   { id: "default", label: "Default", desc: "Raw Groq" },
@@ -203,11 +205,11 @@ const SunIcon = () => (
     <line x1="12" y1="1" x2="12" y2="3" />
     <line x1="12" y1="21" x2="12" y2="23" />
     <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+    <line x1="18.36" y1="4.22" x2="19.78" y2="5.64" />
     <line x1="1" y1="12" x2="3" y2="12" />
     <line x1="21" y1="12" x2="23" y2="12" />
     <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+    <line x1="18.36" y1="19.78" x2="19.78" y2="18.36" />
   </svg>
 )
 
@@ -347,6 +349,8 @@ export default function App() {
   const searchControllersRef = useRef({})
   const searchCacheRef = useRef({})
   const contextManager = useContextManager()
+  // Phase 6: Extract loadContext and contextRestored from the hook
+  const { loadContext, contextRestored } = contextManager
   const activeTab = tabs.find(t => t.id === activeTabId)
   const isIncognito = isIncognitoRuntime()
 
@@ -401,6 +405,13 @@ export default function App() {
     window.addEventListener("beforeunload", stopSession)
     return () => { window.removeEventListener("beforeunload", stopSession); stopSession() }
   }, [appSessionId, contextManager, isIncognito])
+
+  // Phase 6: Load context when tab becomes active
+  useEffect(() => {
+    if (activeTab && activeTab.sessionId && activeTabId) {
+      loadContext(activeTabId, activeTab.sessionId)
+    }
+  }, [activeTabId, activeTab?.sessionId, loadContext])
 
 const updateTab = useCallback((tabId, updates) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t))
@@ -989,6 +1000,48 @@ const updateTab = useCallback((tabId, updates) => {
     updateTab(activeTabId, { query: "", results: null, loading: false, error: null, browserUrl: "", browserTitle: "" })
   }
 
+  // Phase 6: Context Restored banner style
+  const contextRestoredBanner = contextRestored && (
+    <div style={{
+      background: '#22c55e',
+      color: 'white',
+      padding: '8px 16px',
+      borderRadius: '8px',
+      fontSize: '14px',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '8px',
+      marginBottom: '16px',
+      fontWeight: '500',
+      boxShadow: '0 2px 8px rgba(34, 197, 94, 0.3)',
+      animation: 'fadeIn 0.3s ease-in'
+    }}>
+      <span style={{ fontSize: '18px' }}>🔄</span>
+      Context restored from your last session
+    </div>
+  );
+
+  const contextRestoredBannerSearch = contextRestored && (
+    <div style={{
+      background: '#22c55e',
+      color: 'white',
+      padding: '6px 14px',
+      borderRadius: '0 0 8px 8px',
+      fontSize: '13px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      margin: '0 20px',
+      justifyContent: 'center',
+      fontWeight: '500',
+      boxShadow: '0 2px 8px rgba(34, 197, 94, 0.2)',
+      animation: 'fadeIn 0.3s ease-in'
+    }}>
+      <span>🔄</span>
+      Context restored from your last session
+    </div>
+  );
+
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-transparent text-[var(--text-primary)] relative z-10">
       <Suspense fallback={null}>
@@ -1049,6 +1102,8 @@ const updateTab = useCallback((tabId, updates) => {
         ) : isNewTab ? (
           /* Hand-drawn Centered Landing Page */
           <div className="flex-1 flex flex-col items-center justify-center p-4">
+            {/* Phase 6: Context Restored Banner */}
+            {contextRestoredBanner}
             <div className="relative mb-12 text-center">
               <div className="absolute inset-0 bg-white/70 blur-3xl -z-10 rounded-full scale-[1.3] pointer-events-none"></div>
               <h1 className="title-hero text-center select-none m-0">SUPER BROWSER</h1>
@@ -1100,6 +1155,8 @@ const updateTab = useCallback((tabId, updates) => {
         ) : (
           /* Active Search View */
           <div className="flex-1 flex flex-col min-h-0 bg-white shadow-xl relative z-10">
+            {/* Phase 6: Context Restored Banner for Search View */}
+            {contextRestoredBannerSearch}
             {/* Minimalist Top Header */}
             <div className="px-6 py-3 border-b border-[var(--border-color)] flex items-center gap-4 bg-white">
               {/* Browser Navigation Controls */}
@@ -1198,6 +1255,12 @@ const updateTab = useCallback((tabId, updates) => {
     </div>
   )
 }
+
+// Add this CSS animation at the very bottom of the file or in your global CSS
+// @keyframes fadeIn {
+//   from { opacity: 0; transform: translateY(-10px); }
+//   to { opacity: 1; transform: translateY(0); }
+// }
 
 /* ── UI Components ── */
 
@@ -2358,10 +2421,11 @@ function BrowserPanel({ url, title, onClose }) {
   return (
     <div className="h-full flex flex-col bg-white animate-fade-in-up">
       <div className="no-print px-4 py-2 border-b border-[var(--border-color)] flex items-center gap-3">
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 relative">
           <button onClick={onClose} className="p-1.5 rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Back"><ChevronLeftIcon /></button>
           <button disabled className="p-1.5 rounded-full text-[var(--text-secondary)] opacity-30 cursor-not-allowed transition-colors" title="Forward"><ChevronRightIcon /></button>
           <button onClick={reloadPage} className="p-1.5 rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Reload"><RefreshIcon /></button>
+          <ShieldsPanel url={url} webviewRef={webviewRef} />
         </div>
         <input value={url} readOnly className="flex-1 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-sm rounded-lg px-3 py-1.5 outline-none text-[var(--text-secondary)]" />
       </div>
@@ -2378,9 +2442,11 @@ function BrowserPanel({ url, title, onClose }) {
           data-active-browser-view="true"
           id={`webview-${url}`}
           src={url}
+          partition="persist:superbrowser"
+          preload={window.superBrowserDesktop?.webviewPreloadPath}
           className="w-full flex-1"
           style={{ minHeight: 0 }}
-          allowpopups="true"
+          /* SEC-02: allowpopups removed; popups are blocked at process level in main.cjs */
         />
       ) : (
         <iframe
