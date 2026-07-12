@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Body
 from pydantic import BaseModel
-from typing import List, Dict, Optional
 
 from services.super_ai import get_ai_consensus
-
+from typing import List, Dict, Optional
 router = APIRouter()
 
 
