@@ -84,6 +84,25 @@ curl http://localhost:8000/api/context/get/test/tab1
 # Should return: {"queries":["react hooks"],"results":[],"visited_pages":[]}
 ```
 
+## Backend Unit Tests (pytest)
+
+Automated unit tests cover:
+- Core FastAPI endpoints (`/` and `/health`) — `tests/test_main.py`
+- Ad-filtering and result-ranking logic (`scrapers/ad_filter.py`) — `tests/test_ad_filter.py`
+
+Install dependencies:
+```bash
+cd backend
+pip install -r requirements.txt
+```
+
+Run the test suite:
+```bash
+pytest
+```
+
+Expected output: 7
+
 ## Next Steps
 
 After testing Module 0, we'll move to:
