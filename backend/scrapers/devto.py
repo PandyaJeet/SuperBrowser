@@ -6,7 +6,7 @@ async def scrape_devto(query: str) -> list[dict]:
     results = []
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
             headers = {
                 "User-Agent": "SuperBrowser/1.0",
                 "Accept": "application/json",

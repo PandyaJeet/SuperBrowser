@@ -62,7 +62,7 @@ async def scrape_stackexchange(query: str) -> list[dict]:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
             # Step 1: Search for questions
             response = await client.get(
                 search_url, params=params, headers=HEADERS, follow_redirects=True

@@ -9,7 +9,7 @@ async def scrape_hackernews(query: str) -> list[dict]:
     results = []
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
             headers = {"User-Agent": "SuperBrowser/1.0"}
 
             # STEP 1 — Search HN via Algolia

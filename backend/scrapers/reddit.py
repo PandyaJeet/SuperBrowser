@@ -240,7 +240,7 @@ async def _discover_thread_urls(client: httpx.AsyncClient, query: str) -> list[s
 async def scrape_reddit(query: str) -> list[dict]:
     """Scrape Reddit threads and comments using HTML endpoints only (no Reddit API)."""
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
             thread_urls = await _discover_thread_urls(client, query)
             if not thread_urls:
                 print("[reddit] found 0 threads")
