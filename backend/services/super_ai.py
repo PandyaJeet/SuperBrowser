@@ -1,7 +1,10 @@
 import asyncio
+import os
 from typing import Dict, Optional
+from utils.url_normalizer import deduplicate_results
 
 from services.groq_service import ask_groq
+from services.instant_results import create_instant_ai_response
 from services.personas import get_persona
 from services.query_classifier import classify_query
 
@@ -38,6 +41,64 @@ LIVE_DATA_SYSTEM_PROMPT = (
     "6. DO NOT INVENT: Only use information present in the provided search results. "
     "If data is insufficient, say so honestly."
 )
+
+# ── Context trimming ──────────────────────────────────────────────────────────
+# These limits prevent context window overflow in Groq's Llama 3.1 70B (128K tokens).
+# Without them, a user with 50 visited pages sends ~250KB per AI request.
+MAX_CONTEXT_QUERIES = 5        # Keep only the 5 most recent queries
+MAX_CONTEXT_RESULTS = 10       # Keep only the 10 most recent search results
+MAX_VISITED_PAGES = 5          # Keep only the 5 most recently visited pages
+MAX_PAGE_CONTENT_CHARS = 2000  # Trim each page's content to 2,000 characters
+
+
+def trim_context_for_ai(context: dict) -> dict:
+    """
+    Trim the browsing context to a safe size before including in an LLM prompt.
+
+    Prioritizes recency: keeps the most recent queries, results, and pages.
+    This prevents:
+    1. Context window overflow (Groq 128K token limit)
+    2. Unnecessary latency from sending hundreds of KB to the API
+    """
+    if not context:
+        return {"queries": [], "results": [], "visited_pages": []}
+    
+    queries = context.get("queries", [])
+    results = context.get("results", [])
+    visited_pages = context.get("visited_pages", [])
+
+    # Take only the most recent N items from each list
+    trimmed_pages = [
+        {
+            "url": page.get("url", ""),
+            "title": page.get("title", ""),
+            "content": page.get("content", "")[:MAX_PAGE_CONTENT_CHARS]
+        }
+        for page in visited_pages[-MAX_VISITED_PAGES:]
+    ]
+
+    return {
+        "queries": queries[-MAX_CONTEXT_QUERIES:],
+        "results": results[-MAX_CONTEXT_RESULTS:],
+        "visited_pages": trimmed_pages,
+    }
+
+
+def build_context_stats(original_context: dict, trimmed_context: dict) -> dict:
+    """
+    Returns stats about how much context was used vs. available.
+    Sent back to the frontend so it can inform the user.
+    """
+    original_pages = original_context.get("visited_pages", []) if original_context else []
+    trimmed_pages = trimmed_context.get("visited_pages", []) if trimmed_context else []
+
+    return {
+        "queries_used": len(trimmed_context.get("queries", [])) if trimmed_context else 0,
+        "results_used": len(trimmed_context.get("results", [])) if trimmed_context else 0,
+        "pages_used": len(trimmed_pages),
+        "pages_available": len(original_pages),
+        "pages_trimmed": len(original_pages) > len(trimmed_pages),
+    }
 
 
 def _build_persona_prompt(query: str, context_str: str) -> str:
@@ -154,17 +215,11 @@ async def _scrape_all_engines(query: str, gl: str = "us") -> list[dict]:
         elif isinstance(engine_results, Exception):
             print(f"[live_data] scraper exception: {engine_results}")
 
-    # Deduplicate by URL
-    seen_urls = set()
-    deduplicated = []
-    for result in all_results:
-        url = result.get("url", "")
-        if url and url not in seen_urls:
-            seen_urls.add(url)
-            deduplicated.append(result)
+    # Apply URL normalization-based deduplication before returning
+    all_results = deduplicate_results(all_results)
 
-    print(f"[live_data] total scraped: {len(all_results)}, after dedup: {len(deduplicated)} (region: {gl})")
-    return deduplicated
+    print(f"[live_data] total scraped: {len(all_results)}, after dedup: {len(all_results)} (region: {gl})")
+    return all_results
 
 
 async def _scrape_with_api_fallback(query: str, engine: str, gl: str = "us") -> list[dict]:
@@ -204,19 +259,22 @@ def format_context_for_ai(context: Optional[Dict]) -> str:
     if not context:
         return "No browsing context provided."
     
+    # Trim the context before formatting to prevent overflow
+    trimmed_context = trim_context_for_ai(context)
+    
     formatted = []
     
     # Add previous queries
-    if "queries" in context and context["queries"]:
+    if "queries" in trimmed_context and trimmed_context["queries"]:
         formatted.append("## Previous Searches:")
-        for idx, q in enumerate(context["queries"][-5:], 1):  # Last 5 queries
+        for idx, q in enumerate(trimmed_context["queries"], 1):
             formatted.append(f'{idx}. "{q}"')
         formatted.append("")
     
     # Add search results context
-    if "results" in context and context["results"]:
+    if "results" in trimmed_context and trimmed_context["results"]:
         formatted.append("## Recent Search Results:")
-        for idx, result in enumerate(context["results"][:10], 1):  # Top 10 results
+        for idx, result in enumerate(trimmed_context["results"], 1):
             title = result.get("title", "Untitled")
             snippet = result.get("snippet", "")
             url = result.get("url", "")
@@ -228,15 +286,15 @@ def format_context_for_ai(context: Optional[Dict]) -> str:
             formatted.append("")
     
     # Add visited pages content
-    if "visited_pages" in context and context["visited_pages"]:
+    if "visited_pages" in trimmed_context and trimmed_context["visited_pages"]:
         formatted.append("## Content from Visited Pages:")
-        for idx, page in enumerate(context["visited_pages"][:3], 1):  # Last 3 visited
+        for idx, page in enumerate(trimmed_context["visited_pages"], 1):
             title = page.get("title", "Untitled")
             content = page.get("content", "")
             formatted.append(f"{idx}. {title}")
             if content:
-                # Take first 500 chars of content
-                formatted.append(f"   {content[:500]}...")
+                # Content is already trimmed by trim_context_for_ai
+                formatted.append(f"   {content}")
             formatted.append("")
     
     return "\n".join(formatted) if formatted else "No significant context available."
@@ -250,14 +308,23 @@ async def get_ai_consensus(
     model: Optional[str] = None
 ) -> dict:
     """Get AI-generated consensus answer using the specified persona and browsing context."""
+    
+    # Capture original context for stats
+    original_context = context.copy() if context else {}
+    trimmed_context = trim_context_for_ai(context) if context else {}
+    context_stats = build_context_stats(original_context, trimmed_context)
+    
     normalized_persona = (persona or "default").strip().lower()
     persona_config = get_persona(normalized_persona)
+
+    if not os.getenv("GROQ_API_KEY"):
+        return create_instant_ai_response(query, persona=normalized_persona, gl=gl)
     
-    # ─── Step 1: Classify the query ───────────────────────────────
+    # ─── Step 1: Classify the query ─────────────────────────────────────────────
     query_category = await classify_query(query)
     print(f"[super_ai] query='{query}' classified as: {query_category} (region: {gl})")
 
-    # ─── Step 2: Live-data pipeline ───────────────────────────────
+    # ─── Step 2: Live-data pipeline ─────────────────────────────────────────────
     if query_category == "live_data":
         print(f"[super_ai] LIVE DATA mode activated — scraping all engines with region: {gl}...")
         
@@ -274,6 +341,9 @@ async def get_ai_consensus(
                 system_prompt=LIVE_DATA_SYSTEM_PROMPT,
             )
 
+            if not answer or answer.startswith("Groq API"):
+                return create_instant_ai_response(query, persona=normalized_persona, gl=gl)
+
             return {
                 "query": query,
                 "answer": answer,
@@ -282,21 +352,22 @@ async def get_ai_consensus(
                 "context_used": True,
                 "live_data": True,
                 "sources_scraped": len(scraped_results),
-                "region": gl,  # Indicate which region was used
+                "region": gl,
                 "status": "success",
+                "context_stats": context_stats,
             }
         else:
             print("[super_ai] scraping returned no results, falling back to general mode")
 
-    # ─── Step 3: General knowledge pipeline (existing flow) ───────
-    context_str = format_context_for_ai(context)
+    # ─── Step 3: General knowledge pipeline (existing flow) ──────────────────
+    context_str = format_context_for_ai(trimmed_context)
 
     use_default_summary = normalized_persona == "default" or persona_config.get("label") == "Default"
 
     if use_default_summary:
         selected_model = model or DEFAULT_SUPERAI_MODEL
         system_prompt = DEFAULT_SUPERAI_SYSTEM_PROMPT
-        prompt = _build_default_summary_prompt(query, context, context_str)
+        prompt = _build_default_summary_prompt(query, trimmed_context, context_str)
         persona_used = "SuperAI Default Summary"
     else:
         selected_model = model or persona_config.get("model") or DEFAULT_SUPERAI_MODEL
@@ -310,6 +381,9 @@ async def get_ai_consensus(
         system_prompt=system_prompt,
     )
 
+    if not answer or answer.startswith("Groq API"):
+        return create_instant_ai_response(query, persona=normalized_persona, gl=gl)
+
     return {
         "query": query,
         "answer": answer,
@@ -318,4 +392,5 @@ async def get_ai_consensus(
         "context_used": bool(context),
         "live_data": False,
         "status": "success",
+        "context_stats": context_stats,
     }

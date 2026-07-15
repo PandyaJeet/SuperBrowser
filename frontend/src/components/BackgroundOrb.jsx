@@ -115,7 +115,7 @@ export default function BackgroundOrb({ isVisible, theme = 'light' }) {
   return (
     <div 
       className={`fixed inset-0 pointer-events-none transition-opacity duration-1000 ease-in-out ${isVisible ? 'opacity-100' : 'opacity-0'}`} 
-      style={{ zIndex: 0 }}
+      style={{ zIndex: -1 }}
     >
       <Canvas camera={{ position: [0, 0, 14], fov: 45 }} dpr={[1, 2]}>
         <color attach="background" args={[isDark ? '#090d16' : '#ffffff']} />

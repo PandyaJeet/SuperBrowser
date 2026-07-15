@@ -5,7 +5,7 @@ import httpx
 
 
 SERPAPI_SEARCH_URL = "https://serpapi.com/search.json"
-SERPAPI_TIMEOUT = 10.0
+SERPAPI_TIMEOUT = 2.8
 MAX_RESULTS_PER_ENGINE = 10
 
 

@@ -2,15 +2,22 @@
  * Context Manager Hook
  * Manages browsing context for each tab - tracks queries, results, and visited pages
  */
-import { useCallback, useRef } from 'react'
+import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react'
 import { getApiBase } from './config/apiBase'
+
 
 const API_BASE = getApiBase()
 
+// to get the session token
+const getSessionToken = () => {
+  return import.meta.env.VITE_SUPERBROWSER_SESSION_TOKEN || "";
+};
+
 export function useContextManager() {
   // In-memory context storage per tab
-  // Structure: { tabId: { queries: [], results: [], visited_pages: [] } }
   const contextStore = useRef({});
+
+  onst [contextRestored, setContextRestored] = React.useState(false);
 
   // Initialize context for a tab
   const initializeTab = useCallback((tabId, sessionId) => {
@@ -31,7 +38,10 @@ export function useContextManager() {
     }
     const res = await fetch(`${API_BASE}/api/context/session/start`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Session-Token': getSessionToken()
+      },
       body: JSON.stringify({ session_id: sessionId })
     })
     if (!res.ok) throw new Error(`Failed to start session: ${res.status}`)
@@ -46,6 +56,9 @@ export function useContextManager() {
     }
     const res = await fetch(`${API_BASE}/api/context/session/stop/${sessionId}`, {
       method: 'POST',
+      headers: {
+        'X-Session-Token': getSessionToken()
+      },
       keepalive
     })
     if (!res.ok) throw new Error(`Failed to stop session: ${res.status}`)
@@ -59,19 +72,20 @@ export function useContextManager() {
     const context = contextStore.current[tabId];
     context.queries.push(query);
     
-    // Keep only last 20 queries
     if (context.queries.length > 20) {
       context.queries = context.queries.slice(-20);
     }
 
-    // Send to backend (fire and forget)
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.addQuery) {
       window.superBrowserDesktop.context.addQuery(sessionId, tabId, query, mode).catch(() => {});
       return;
     }
     fetch(`${API_BASE}/api/context/add_query`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Session-Token': getSessionToken()
+      },
       body: JSON.stringify({ session_id: sessionId, tab_id: tabId, query, mode })
     }).catch(() => {});
   }, [initializeTab]);
@@ -81,8 +95,6 @@ export function useContextManager() {
     initializeTab(tabId, sessionId);
     
     const context = contextStore.current[tabId];
-    
-    // Extract relevant data from results
     const resultsData = results.map(r => ({
       url: r.url || r.link || '',
       title: r.title || '',
@@ -92,14 +104,16 @@ export function useContextManager() {
     
     context.results = resultsData;
 
-    // Send to backend
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.addResults) {
       window.superBrowserDesktop.context.addResults(sessionId, tabId, resultsData).catch(() => {});
       return;
     }
     fetch(`${API_BASE}/api/context/add_results`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Session-Token': getSessionToken()
+      },
       body: JSON.stringify({ session_id: sessionId, tab_id: tabId, results: resultsData })
     }).catch(() => {});
   }, [initializeTab]);
@@ -117,25 +131,26 @@ export function useContextManager() {
     const page = {
       url,
       title,
-      content: (content || '').substring(0, 5000), // Limit content size
+      content: (content || '').substring(0, 5000),
       timestamp: new Date().toISOString()
     };
     
     context.visited_pages.push(page);
     
-    // Keep only last 10 visited pages
     if (context.visited_pages.length > 10) {
       context.visited_pages = context.visited_pages.slice(-10);
     }
 
-    // Send to backend
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.addVisitedPage) {
       window.superBrowserDesktop.context.addVisitedPage(sessionId, tabId, page).catch(() => {});
       return;
     }
     fetch(`${API_BASE}/api/context/add_visited_page`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Session-Token': getSessionToken()
+      },
       body: JSON.stringify({ session_id: sessionId, tab_id: tabId, page })
     }).catch(() => {});
   }, [initializeTab]);
@@ -143,22 +158,18 @@ export function useContextManager() {
   // Get context for a tab
   const getContext = useCallback((tabId) => {
     if (!contextStore.current[tabId]) {
-      return {
-        queries: [],
-        results: [],
-        visited_pages: []
-      };
+      return { queries: [], results: [], visited_pages: [] };
     }
     return contextStore.current[tabId];
   }, []);
 
-  // Get context for AI (formats nicely)
+  // Get context for AI
   const getAIContext = useCallback((tabId) => {
     const context = getContext(tabId);
     return {
       queries: context.queries || [],
-      results: (context.results || []).slice(0, 10), // Top 10 results
-      visited_pages: (context.visited_pages || []).slice(-3) // Last 3 visited
+      results: (context.results || []).slice(0, 10),
+      visited_pages: (context.visited_pages || []).slice(-3)
     };
   }, [getContext]);
 
@@ -166,39 +177,73 @@ export function useContextManager() {
   const clearTabContext = useCallback((tabId, sessionId) => {
     delete contextStore.current[tabId];
     
-    // Clear from backend (prefer IPC in Electron)
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.clearTab) {
       window.superBrowserDesktop.context.clearTab(sessionId, tabId).catch(() => {});
       return;
     }
-    fetch(`${API_BASE}/api/context/clear/${sessionId}/${tabId}`, { method: 'DELETE' }).catch(() => {});
+    fetch(`${API_BASE}/api/context/clear/${sessionId}/${tabId}`, { 
+      method: 'DELETE',
+      headers: { 'X-Session-Token': getSessionToken() }
+    }).catch(() => {});
   }, []);
 
   const fetchTabContext = useCallback(async (tabId, sessionId) => {
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.getTab) {
       try {
-        const data = await window.superBrowserDesktop.context.getTab(sessionId, tabId);
-        return data;
-      } catch {
-        // fallback to HTTP
-      }
+        return await window.superBrowserDesktop.context.getTab(sessionId, tabId);
+      } catch {}
     }
-    const res = await fetch(`${API_BASE}/api/context/get/${sessionId}/${tabId}`);
+    const res = await fetch(`${API_BASE}/api/context/get/${sessionId}/${tabId}`, {
+      headers: { 'X-Session-Token': getSessionToken() }
+    });
     if (!res.ok) throw new Error(`Failed to fetch context: ${res.status}`);
     return res.json();
   }, []);
 
+  useEffect(() => {
+  // This would need to be called from a component with actual tabId/sessionId
+  // For now, we'll expose the function and let components handle it
+  // This is a placeholder - the actual loading happens in the component
+}, []);
+
+// Better approach: Add a loadContext function that components can call
+const loadContext = useCallback(async (tabId, sessionId) => {
+  if (!tabId || !sessionId) return;
+  
+  try {
+    const data = await fetchTabContext(tabId, sessionId);
+    if (data && (data.queries?.length > 0 || data.visited_pages?.length > 0)) {
+      // Populate the context store
+      if (!contextStore.current[tabId]) {
+        contextStore.current[tabId] = {
+          sessionId,
+          queries: [],
+          results: [],
+          visited_pages: []
+        };
+      }
+      contextStore.current[tabId].queries = data.queries || [];
+      contextStore.current[tabId].results = data.results || [];
+      contextStore.current[tabId].visited_pages = data.visited_pages || [];
+      
+      // Show the restoration indicator
+      setContextRestored(true);
+      setTimeout(() => setContextRestored(false), 4000);
+    }
+  } catch (err) {
+    console.warn('Could not load context:', err);
+  }
+}, [fetchTabContext]);
+
   const fetchSessionContext = useCallback(async (sessionId) => {
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.getSession) {
       try {
-        const data = await window.superBrowserDesktop.context.getSession(sessionId)
-        return data
-      } catch {
-        // fallback to HTTP
-      }
+        return await window.superBrowserDesktop.context.getSession(sessionId)
+      } catch {}
     }
-
-    const res = await fetch(`${API_BASE}/api/context/session/${sessionId}`)
+    const res = await fetch(`${API_BASE}/api/context/session/${sessionId}`, {
+      headers: { 'X-Session-Token': getSessionToken() }
+    })
     if (!res.ok) throw new Error(`Failed to fetch session context: ${res.status}`)
     return res.json()
   }, [])
@@ -208,7 +253,9 @@ export function useContextManager() {
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.exportSession) {
       data = await window.superBrowserDesktop.context.exportSession(sessionId);
     } else {
-      const res = await fetch(`${API_BASE}/api/context/export/${sessionId}`);
+      const res = await fetch(`${API_BASE}/api/context/export/${sessionId}`, {
+        headers: { 'X-Session-Token': getSessionToken() }
+      });
       if (!res.ok) throw new Error(`Failed to export session context: ${res.status}`);
       data = await res.json();
     }
@@ -229,7 +276,6 @@ export function useContextManager() {
     return { filename, stats: data?.stats || {} }
   }, [])
 
-  // Get context summary (for UI display)
   const getContextSummary = useCallback((tabId) => {
     const context = getContext(tabId);
     return {
@@ -239,8 +285,13 @@ export function useContextManager() {
       hasContext: (context.queries?.length || 0) > 0 || (context.results?.length || 0) > 0
     };
   }, [getContext]);
+  
+  const wipeWorkspace = useCallback(async (sessionId) => {
+    await clearEntireSessionWorkspace(sessionId);
+    window.location.reload(); 
+  }, []);
 
-  return {
+  return useMemo(() => ({
     startSession,
     stopSession,
     initializeTab,
@@ -253,6 +304,47 @@ export function useContextManager() {
     getContextSummary,
     fetchTabContext,
     fetchSessionContext,
-    downloadSessionContext
-  };
+    wipeWorkspace,
+    downloadSessionContext,
+    loadContext,
+    contextRestored
+  }), [
+    startSession,
+    stopSession,
+    initializeTab,
+    addQuery,
+    addResults,
+    addVisitedPage,
+    getContext,
+    getAIContext,
+    clearTabContext,
+    getContextSummary,
+    fetchTabContext,
+    fetchSessionContext,
+    downloadSessionContext,
+    loadContext,
+    contextRestored
+  ]);
 }
+
+// 
+export const clearEntireSessionWorkspace = async (sessionId) => {
+  try {
+    const response = await fetch(`${API_BASE}/api/context/clear/${sessionId}`, {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Session-Token": getSessionToken()
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to wipe session: ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error during global workspace wipe:", error);
+    return null;
+  }
+};

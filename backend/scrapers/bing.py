@@ -93,7 +93,7 @@ async def scrape_bing(query: str) -> list[dict]:
     status = "request_failed"
 
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             response = await client.get(
                 BING_SEARCH_URL,
                 params={"q": query, "count": "10", "setlang": "en-US"},
@@ -113,7 +113,7 @@ async def scrape_bing(query: str) -> list[dict]:
 
     # Fallback path: RSS endpoint remains stable when web HTML is JS/captcha-heavy.
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             rss_response = await client.get(
                 BING_SEARCH_URL,
                 params={"q": query, "format": "rss", "count": "10", "setlang": "en-US"},
