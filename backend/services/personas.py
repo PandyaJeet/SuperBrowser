@@ -1,10 +1,11 @@
 from pathlib import Path
+from typing import Optional
 
 
 PROMPTS_DIR = Path(__file__).resolve().parents[2] / "systemprompt"
 
 
-def _read_system_prompt(filename: str, fallback: str | None) -> str | None:
+def _read_system_prompt(filename: str, fallback: Optional[str]) -> Optional[str]:
     """Read persona system prompt from disk with safe fallback."""
     prompt_path = PROMPTS_DIR / filename
     try:

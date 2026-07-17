@@ -1,5 +1,6 @@
 import asyncio
 import re
+from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -135,7 +136,7 @@ def _extract_thread_urls_from_old_search(html: str) -> list[str]:
     return urls
 
 
-def _parse_thread_page(html: str, thread_url: str) -> dict | None:
+def _parse_thread_page(html: str, thread_url: str) -> Optional[dict]:
     soup = BeautifulSoup(html, "html.parser")
 
     post = soup.select_one("div.thing.link")
@@ -248,7 +249,7 @@ async def scrape_reddit(query: str) -> list[dict]:
 
             semaphore = asyncio.Semaphore(3)
 
-            async def fetch_thread(thread_url: str) -> dict | None:
+            async def fetch_thread(thread_url: str) -> Optional[dict]:
                 async with semaphore:
                     try:
                         await asyncio.sleep(0.2)
