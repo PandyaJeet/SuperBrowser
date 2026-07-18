@@ -1,5 +1,5 @@
 import os
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 
@@ -9,12 +9,12 @@ SERPAPI_TIMEOUT = 2.8
 MAX_RESULTS_PER_ENGINE = 10
 
 
-def _get_serpapi_key() -> str | None:
+def _get_serpapi_key() -> Optional[str]:
     # Support both names so existing deployments do not break.
     return os.getenv("SERPAPI_API_KEY") or os.getenv("SERP_API_KEY")
 
 
-def _build_params(engine: str, query: str, api_key: str, gl: str | None = None) -> dict[str, str]:
+def _build_params(engine: str, query: str, api_key: str, gl: Optional[str] = None) -> dict[str, str]:
     """
     Build search parameters for SerpAPI.
     
@@ -68,7 +68,7 @@ def _normalize_snippet(value: Any) -> str:
     return ""
 
 
-def _normalize_result(item: dict[str, Any], source: str) -> dict[str, str] | None:
+def _normalize_result(item: dict[str, Any], source: str) -> Optional[dict[str, str]]:
     title = item.get("title", "")
     url = item.get("link") or item.get("url") or ""
     snippet = _normalize_snippet(item.get("snippet"))
@@ -87,7 +87,7 @@ def _normalize_result(item: dict[str, Any], source: str) -> dict[str, str] | Non
     }
 
 
-async def search_serpapi_engine(query: str, engine: str, gl: str | None = None) -> dict[str, list]:
+async def search_serpapi_engine(query: str, engine: str, gl: Optional[str] = None) -> dict[str, list]:
     """
     Fetch and normalize SerpAPI organic results and shopping results for one engine.
     
@@ -132,13 +132,13 @@ async def search_serpapi_engine(query: str, engine: str, gl: str | None = None) 
     return {"organic": normalized, "shopping": shopping_results}
 
 
-async def search_google_serpapi(query: str, gl: str | None = None) -> dict[str, list]:
+async def search_google_serpapi(query: str, gl: Optional[str] = None) -> dict[str, list]:
     return await search_serpapi_engine(query, "google", gl=gl)
 
 
-async def search_bing_serpapi(query: str, gl: str | None = None) -> dict[str, list]:
+async def search_bing_serpapi(query: str, gl: Optional[str] = None) -> dict[str, list]:
     return await search_serpapi_engine(query, "bing", gl=gl)
 
 
-async def search_duckduckgo_serpapi(query: str, gl: str | None = None) -> dict[str, list]:
+async def search_duckduckgo_serpapi(query: str, gl: Optional[str] = None) -> dict[str, list]:
     return await search_serpapi_engine(query, "duckduckgo", gl=gl)

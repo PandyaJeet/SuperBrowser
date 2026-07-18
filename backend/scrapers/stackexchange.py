@@ -1,4 +1,5 @@
 import asyncio
+from typing import Optional
 
 import httpx
 from bs4 import BeautifulSoup
@@ -14,7 +15,7 @@ def strip_html(html: str) -> str:
 
 async def fetch_top_answer(
     client: httpx.AsyncClient, question_id: int
-) -> dict | None:
+) -> Optional[dict]:
     """Fetch the top answer for a question."""
     url = f"https://api.stackexchange.com/2.3/questions/{question_id}/answers"
     params = {

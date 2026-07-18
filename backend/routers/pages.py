@@ -1,3 +1,4 @@
+from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -14,7 +15,7 @@ def _validate_url(url: str) -> str:
     return url
 
 
-def _clean_text(value: str | None) -> str:
+def _clean_text(value: Optional[str]) -> str:
     return " ".join((value or "").split())
 
 

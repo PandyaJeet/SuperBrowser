@@ -1,5 +1,6 @@
 import os
 import asyncio
+from typing import Optional
 
 import httpx
 
@@ -40,10 +41,10 @@ def parse_retry_after(
         return fallback
 
 async def ask_groq(
-    prompt: str | None = None,
+    prompt: Optional[str] = None,
     model: str = "llama-3.1-8b-instant",
-    system_prompt: str | None = None,
-    messages: list[dict[str, str]] | None = None,
+    system_prompt: Optional[str] = None,
+    messages: Optional[list[dict[str, str]]] = None,
 ) -> str:
     """Call Groq API with optional system prompt, message history, and model selection.
     
