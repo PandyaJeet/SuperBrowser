@@ -6,3 +6,4 @@ python-dotenv
 google-generativeai
 groq
 cachetools
+pytest>=8.0.0
