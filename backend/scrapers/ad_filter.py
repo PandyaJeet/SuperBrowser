@@ -82,7 +82,7 @@ def score_and_rank(sources: list[list[dict]]) -> list[dict]:
             "title": best_result.get("title", ""),
             "url": best_result.get("url", ""),
             "snippet": best_result.get("snippet", ""),
-            "source": best_result.get("source", ""),
+            "source": ", ".join(sorted(unique_sources)),
             "trust_score": trust_score,
             "cross_validated": cross_validated,
         })

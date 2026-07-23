@@ -62,12 +62,6 @@ async def ask_groq(
                 return data["choices"][0]["message"]["content"].strip()
 
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                print(f"[groq] Rate limited (429), retrying in {backoff:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})")
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30)
-                last_error = e
-                continue
             return f"Groq API error: {str(e)}"
         except Exception as e:
             last_error = e

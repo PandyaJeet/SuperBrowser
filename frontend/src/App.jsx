@@ -195,7 +195,7 @@ export default function App() {
     if (!url) return
     const bt = createNewTab(appSessionId); bt.browserUrl = url; bt.browserTitle = title; bt.title = (title || "Web").slice(0, 25); bt.query = url
     setTabs(p => [...p, bt]); setActiveTabId(bt.id)
-    if (activeTab) contextManager.addVisitedPage(activeTabId, activeTab.sessionId, url, title, `Visited: ${url}`)
+    if (activeTab) contextManager.addVisitedPage(bt.id, activeTab.sessionId, url, title, `Visited: ${url}`)
   }
   function goHome() {
     updateTab(activeTabId, { query: "", results: null, loading: false, error: null, browserUrl: "", browserTitle: "" })
