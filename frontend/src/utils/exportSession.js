@@ -4,7 +4,8 @@ const API_BASE = getApiBase()
 export async function exportSessionToMarkdown(sessionId) {
     try {
         const res = await fetch(`${API_BASE}/api/context/export/${sessionId}`);
-        const data = await res.json();
+        if (!res.ok) throw new Error("Request failed");
+const data = await res.json();
 
         const tabs = data.tabs || {};
         const session = data.session || {};
