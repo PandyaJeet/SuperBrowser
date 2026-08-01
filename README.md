@@ -185,12 +185,28 @@ cd SuperBrowser
 ```bash
 cd backend
 pip install -r requirements.txt
+cp .env.example .env
+```
 
-# create your .env (see Configuration below), then run:
+Now generate a session token — the backend **will not serve any search or context
+route without one**:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Put that value in `backend/.env` as `SUPERBROWSER_SESSION_TOKEN`, keep it handy for
+the frontend step, then start the server:
+
+```bash
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 The API will be available at **http://localhost:8000**, with interactive docs at **http://localhost:8000/docs**.
+
+> ⚠️ If you skip the token, every `/api/search/*` and `/api/context/*` request
+> returns **HTTP 500 — "Server authentication not configured"**. The backend fails
+> closed by design and prints a warning at startup telling you exactly this.
 
 > **Port already in use?** `lsof -ti:8000 | xargs kill -9`
 
@@ -201,10 +217,23 @@ In a second terminal:
 ```bash
 cd frontend
 npm install
+cp .env.example .env.local
+```
+
+Set `VITE_SUPERBROWSER_SESSION_TOKEN` in `frontend/.env.local` to **the same token**
+you put in `backend/.env`, then:
+
+```bash
 npm run dev -- --host 0.0.0.0
 ```
 
 Open **http://localhost:5173** in your browser. The frontend auto-detects its API base (local, Codespaces, or Electron), so no extra config is needed for local dev.
+
+> If the two tokens do not match, searches fail with a visible **"Not authorised"**
+> banner. That is the expected signal — not a silent empty result list.
+>
+> The **desktop app needs neither variable**: Electron generates its own token on
+> first launch and injects it over IPC.
 
 ---
 
@@ -213,6 +242,10 @@ Open **http://localhost:5173** in your browser. The frontend auto-detects its AP
 Create a `.env` file inside the **`backend/`** directory:
 
 ```env
+# Required — shared secret guarding /api/search/* and /api/context/*
+# Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+SUPERBROWSER_SESSION_TOKEN=your_generated_token
+
 # Required — powers SuperSEO search across Google, Bing & DuckDuckGo
 SERPAPI_API_KEY=your_serpapi_key
 
@@ -221,15 +254,43 @@ GROQ_API_KEY=your_groq_key
 
 # Optional — CORS allow-list (comma-separated). Defaults to http://localhost:5173
 ALLOWED_ORIGINS=http://localhost:5173
+
+# Optional — where per-tab context JSON is persisted.
+# Defaults to /tmp/superbrowser_contexts.
+CONTEXT_STORE_DIR=/tmp/superbrowser_contexts
 ```
 
 | Variable | Required | Purpose | Get a key |
 |---|:---:|---|---|
+| `SUPERBROWSER_SESSION_TOKEN` | ✅ | Auth token for all search & context routes. Backend returns HTTP 500 on every gated route without it | generate locally (below) |
 | `SERPAPI_API_KEY` *(or `SERP_API_KEY`)* | ✅ | Live search results for SuperSEO | [serpapi.com](https://serpapi.com) |
 | `GROQ_API_KEY` | ✅ | LLM inference for SuperAI & summaries | [console.groq.com](https://console.groq.com) |
 | `ALLOWED_ORIGINS` | ⬜ | CORS origins for the backend | — |
+| `CONTEXT_STORE_DIR` | ⬜ | Directory for persisted per-tab context. Defaults to `/tmp/superbrowser_contexts` | — |
 
-**Frontend overrides** (optional, via Vite env): `VITE_API_BASE` and `VITE_API_BASE_ELECTRON` let you point the UI at a custom backend URL.
+### Frontend environment
+
+Create `frontend/.env.local` (template: `frontend/.env.example`):
+
+| Variable | Required | Purpose |
+|---|:---:|---|
+| `VITE_SUPERBROWSER_SESSION_TOKEN` | ✅ *(web build)* | **Must exactly match** the backend's `SUPERBROWSER_SESSION_TOKEN`. Mismatched or missing ⇒ every search returns 401 and the UI shows a "Not authorised" banner |
+| `VITE_API_BASE` | ⬜ | Override the auto-detected backend URL |
+| `VITE_API_BASE_ELECTRON` | ⬜ | Override the backend URL in desktop mode |
+
+**Generating the token** — run once and use the same value on both sides:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+> **Desktop app:** neither token variable is needed. Electron generates its own
+> token on first launch, stores it in `settings.json`, passes it to the backend it
+> spawns, and attaches it over IPC — so it never reaches renderer JavaScript.
+>
+> **Note:** `VITE_*` values are bundled into the client build and are visible to
+> anyone who loads the page. This token gates a self-hosted backend; it is not a
+> per-user credential.
 
 > If any SerpAPI engine fails or returns nothing, SuperSEO automatically falls back to the matching web scraper — so search keeps working even without a perfect API response.
 

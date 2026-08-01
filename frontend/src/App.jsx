@@ -1,6 +1,7 @@
 import { Suspense, lazy, useState, useCallback, useEffect, useRef } from 'react'
 import { clearEntireSessionWorkspace, useContextManager } from './useContextManager'
 import { getApiBase } from './config/apiBase'
+import { apiFetch, apiFetchJson } from './lib/apiFetch'
 
 const LazyCommunityResults = lazy(() => import('./components/CommunityResults'))
 const LazyBackgroundOrb = lazy(() => import('./components/BackgroundOrb'))
@@ -437,6 +438,13 @@ const updateTab = useCallback((tabId, updates) => {
         return
       }
       console.error(`[Search] Error for tab ${tabId}:`, error)
+      // An auth failure is a configuration problem, not an upstream outage.
+      // Surface it instead of masking it with instant results, which would
+      // leave the user staring at canned links with no idea anything is wrong.
+      if (error?.isAuthError) {
+        setTabs(p => p.map(t => t.id === tabId ? { ...t, error: error.message, loading: false, results: null } : t))
+        return
+      }
       if (tabData.activeMode === 'seo') {
         const fallbackData = createInstantSearchResults(tabData.query)
         setTabs(p => p.map(t => t.id === tabId ? { ...t, error: null, loading: false, results: fallbackData } : t))
@@ -481,23 +489,23 @@ const updateTab = useCallback((tabId, updates) => {
     if (tabData.activeMode === 'ai') {
       const context = contextManager.getAIContext(tabId)
       if (context.queries.length > 0 || context.results.length > 0 || context.visited_pages.length > 0) {
-        fetch(`${API_BASE}/api/search/ai/contextual`, { 
-          method: 'POST', 
-          headers: { 'Content-Type': 'application/json' }, 
-          signal: controller.signal, 
-          body: JSON.stringify({ query: tabData.query, persona: searchPersona, context, region: userRegion }) 
+        apiFetchJson(`/api/search/ai/contextual`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({ query: tabData.query, persona: searchPersona, context, region: userRegion })
         })
-          .then(r => r.json()).then(onSuccess).catch(onError).finally(onDone)
+          .then(onSuccess).catch(onError).finally(onDone)
         return
       }
     }
 
     // Default target fallbacks outside native Electron runtime environment (e.g., standard browser view)
     const endpoints = { seo: `/api/search/seo`, ai: `/api/search/ai`, community: `/api/search/community` }
-    let url = `${API_BASE}${endpoints[tabData.activeMode]}?q=${encodeURIComponent(tabData.query)}&session_id=${tabData.sessionId}&gl=${userRegion}`
+    let url = `${endpoints[tabData.activeMode]}?q=${encodeURIComponent(tabData.query)}&session_id=${tabData.sessionId}&gl=${userRegion}`
     if (tabData.activeMode === 'ai') url += `&persona=${searchPersona}`
-    
-    fetch(url, { signal: controller.signal }).then(r => r.json()).then(onSuccess).catch(onError).finally(onDone)
+
+    apiFetchJson(url, { signal: controller.signal }).then(onSuccess).catch(onError).finally(onDone)
   }, [contextManager, userRegion])
 
   // Map handleSearch to performSearch to eliminate execution anomalies across the JSX elements
@@ -2159,8 +2167,7 @@ function ContextWindow({ show, onClose, tabId, sessionId, contextManager }) {
 
   useEffect(() => {
     if (show) {
-      fetch(`${API_BASE}/api/context/models`)
-        .then(r => r.json())
+      apiFetchJson(`/api/context/models`)
         .then(data => {
           if (data.models) {
             setModels(data.models)
@@ -2193,7 +2200,7 @@ function ContextWindow({ show, onClose, tabId, sessionId, contextManager }) {
     setIsLoading(true)
 
     try {
-      const response = await fetch(`${API_BASE}/api/context/chat`, {
+      const data = await apiFetchJson(`/api/context/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2203,9 +2210,6 @@ function ContextWindow({ show, onClose, tabId, sessionId, contextManager }) {
           model: selectedModel
         })
       })
-
-      if (!response.ok) throw new Error(`Chat failed: ${response.status}`)
-      const data = await response.json()
 
       const aiReply = {
         id: (Date.now() + 1).toString(),
@@ -2306,11 +2310,7 @@ function PagePreview({ url, title, onRetryBrowser }) {
     setError("")
     setPreview(null)
 
-    fetch(`${API_BASE}/api/page/preview?url=${encodeURIComponent(url)}`)
-      .then(response => {
-        if (!response.ok) throw new Error(`Preview failed with ${response.status}`)
-        return response.json()
-      })
+    apiFetchJson(`/api/page/preview?url=${encodeURIComponent(url)}`)
       .then(data => {
         if (!cancelled) setPreview(data)
       })

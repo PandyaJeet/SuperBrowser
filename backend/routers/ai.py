@@ -2,6 +2,7 @@ from fastapi import APIRouter, Body
 from pydantic import BaseModel
 
 from services.super_ai import get_ai_consensus
+from utils.sanitize import sanitize_query
 from typing import List, Dict, Optional
 router = APIRouter()
 

@@ -1,10 +1,8 @@
-import { getApiBase } from '../config/apiBase'
+import { apiFetchJson } from '../lib/apiFetch'
 
-const API_BASE = getApiBase()
 export async function exportSessionToMarkdown(sessionId) {
     try {
-        const res = await fetch(`${API_BASE}/api/context/export/${sessionId}`);
-        const data = await res.json();
+        const data = await apiFetchJson(`/api/context/export/${sessionId}`);
 
         const tabs = data.tabs || {};
         const session = data.session || {};

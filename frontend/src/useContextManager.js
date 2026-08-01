@@ -3,21 +3,13 @@
  * Manages browsing context for each tab - tracks queries, results, and visited pages
  */
 import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react'
-import { getApiBase } from './config/apiBase'
-
-
-const API_BASE = getApiBase()
-
-// to get the session token
-const getSessionToken = () => {
-  return import.meta.env.VITE_SUPERBROWSER_SESSION_TOKEN || "";
-};
+import { apiFetch, apiFetchJson } from './lib/apiFetch'
 
 export function useContextManager() {
   // In-memory context storage per tab
   const contextStore = useRef({});
 
-  onst [contextRestored, setContextRestored] = React.useState(false);
+  const [contextRestored, setContextRestored] = React.useState(false);
 
   // Initialize context for a tab
   const initializeTab = useCallback((tabId, sessionId) => {
@@ -36,16 +28,11 @@ export function useContextManager() {
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.startSession) {
       return window.superBrowserDesktop.context.startSession(sessionId)
     }
-    const res = await fetch(`${API_BASE}/api/context/session/start`, {
+    return apiFetchJson(`/api/context/session/start`, {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'X-Session-Token': getSessionToken()
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId })
     })
-    if (!res.ok) throw new Error(`Failed to start session: ${res.status}`)
-    return res.json()
   }, [])
 
   const stopSession = useCallback(async (sessionId, options = {}) => {
@@ -54,15 +41,10 @@ export function useContextManager() {
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.stopSession) {
       return window.superBrowserDesktop.context.stopSession(sessionId, { keepalive })
     }
-    const res = await fetch(`${API_BASE}/api/context/session/stop/${sessionId}`, {
+    return apiFetchJson(`/api/context/session/stop/${sessionId}`, {
       method: 'POST',
-      headers: {
-        'X-Session-Token': getSessionToken()
-      },
       keepalive
     })
-    if (!res.ok) throw new Error(`Failed to stop session: ${res.status}`)
-    return res.json()
   }, [])
 
   // Add a query to tab context
@@ -80,12 +62,9 @@ export function useContextManager() {
       window.superBrowserDesktop.context.addQuery(sessionId, tabId, query, mode).catch(() => {});
       return;
     }
-    fetch(`${API_BASE}/api/context/add_query`, {
+    apiFetch(`/api/context/add_query`, {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'X-Session-Token': getSessionToken()
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId, tab_id: tabId, query, mode })
     }).catch(() => {});
   }, [initializeTab]);
@@ -108,12 +87,9 @@ export function useContextManager() {
       window.superBrowserDesktop.context.addResults(sessionId, tabId, resultsData).catch(() => {});
       return;
     }
-    fetch(`${API_BASE}/api/context/add_results`, {
+    apiFetch(`/api/context/add_results`, {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'X-Session-Token': getSessionToken()
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId, tab_id: tabId, results: resultsData })
     }).catch(() => {});
   }, [initializeTab]);
@@ -145,12 +121,9 @@ export function useContextManager() {
       window.superBrowserDesktop.context.addVisitedPage(sessionId, tabId, page).catch(() => {});
       return;
     }
-    fetch(`${API_BASE}/api/context/add_visited_page`, {
+    apiFetch(`/api/context/add_visited_page`, {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'X-Session-Token': getSessionToken()
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId, tab_id: tabId, page })
     }).catch(() => {});
   }, [initializeTab]);
@@ -181,9 +154,8 @@ export function useContextManager() {
       window.superBrowserDesktop.context.clearTab(sessionId, tabId).catch(() => {});
       return;
     }
-    fetch(`${API_BASE}/api/context/clear/${sessionId}/${tabId}`, { 
-      method: 'DELETE',
-      headers: { 'X-Session-Token': getSessionToken() }
+    apiFetch(`/api/context/clear/${sessionId}/${tabId}`, {
+      method: 'DELETE'
     }).catch(() => {});
   }, []);
 
@@ -193,11 +165,7 @@ export function useContextManager() {
         return await window.superBrowserDesktop.context.getTab(sessionId, tabId);
       } catch {}
     }
-    const res = await fetch(`${API_BASE}/api/context/get/${sessionId}/${tabId}`, {
-      headers: { 'X-Session-Token': getSessionToken() }
-    });
-    if (!res.ok) throw new Error(`Failed to fetch context: ${res.status}`);
-    return res.json();
+    return apiFetchJson(`/api/context/get/${sessionId}/${tabId}`);
   }, []);
 
   useEffect(() => {
@@ -241,11 +209,7 @@ const loadContext = useCallback(async (tabId, sessionId) => {
         return await window.superBrowserDesktop.context.getSession(sessionId)
       } catch {}
     }
-    const res = await fetch(`${API_BASE}/api/context/session/${sessionId}`, {
-      headers: { 'X-Session-Token': getSessionToken() }
-    })
-    if (!res.ok) throw new Error(`Failed to fetch session context: ${res.status}`)
-    return res.json()
+    return apiFetchJson(`/api/context/session/${sessionId}`)
   }, [])
 
   const downloadSessionContext = useCallback(async (sessionId) => {
@@ -253,11 +217,7 @@ const loadContext = useCallback(async (tabId, sessionId) => {
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.exportSession) {
       data = await window.superBrowserDesktop.context.exportSession(sessionId);
     } else {
-      const res = await fetch(`${API_BASE}/api/context/export/${sessionId}`, {
-        headers: { 'X-Session-Token': getSessionToken() }
-      });
-      if (!res.ok) throw new Error(`Failed to export session context: ${res.status}`);
-      data = await res.json();
+      data = await apiFetchJson(`/api/context/export/${sessionId}`);
     }
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
     const safeSession = (sessionId || 'session').slice(0, 8)
@@ -330,19 +290,10 @@ const loadContext = useCallback(async (tabId, sessionId) => {
 // 
 export const clearEntireSessionWorkspace = async (sessionId) => {
   try {
-    const response = await fetch(`${API_BASE}/api/context/clear/${sessionId}`, {
+    return await apiFetchJson(`/api/context/clear/${sessionId}`, {
       method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Session-Token": getSessionToken()
-      },
+      headers: { "Content-Type": "application/json" },
     });
-
-    if (!response.ok) {
-      throw new Error(`Failed to wipe session: ${response.statusText}`);
-    }
-
-    return await response.json();
   } catch (error) {
     console.error("Error during global workspace wipe:", error);
     return null;

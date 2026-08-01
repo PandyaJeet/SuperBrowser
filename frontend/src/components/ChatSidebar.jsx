@@ -1,7 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { getApiBase } from '../config/apiBase'
-
-const API_BASE = getApiBase()
+import { apiFetchJson } from '../lib/apiFetch'
 
 const PlusIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -54,8 +52,7 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
 
   // Fetch available models on mount
   useEffect(() => {
-    fetch(`${API_BASE}/api/context/models`)
-      .then(r => r.json())
+    apiFetchJson(`/api/context/models`)
       .then(data => {
         if (data.models) {
           setModels(data.models)
@@ -68,9 +65,7 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
   // Fetch chat sessions for this tab
   const fetchSessions = async (selectLatest = true) => {
     try {
-      const response = await fetch(`${API_BASE}/api/context/chat/sessions/${tabId}`)
-      if (!response.ok) throw new Error('Failed to fetch sessions')
-      const data = await response.json()
+      const data = await apiFetchJson(`/api/context/chat/sessions/${tabId}`)
       
       if (data.sessions && data.sessions.length > 0) {
         setSessions(data.sessions)
@@ -83,20 +78,18 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
       }
     } catch (err) {
       console.error(err)
-      setError('Could not load chat sessions.')
+      setError(err?.isAuthError ? err.message : 'Could not load chat sessions.')
     }
   }
 
   // Create a new session
   const createSession = async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/context/chat/session`, {
+      const data = await apiFetchJson(`/api/context/chat/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tab_id: tabId })
       })
-      if (!response.ok) throw new Error('Failed to create session')
-      const data = await response.json()
       
       // Refresh list and select the new session
       await fetchSessions(false)
@@ -104,7 +97,7 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
       setError(null)
     } catch (err) {
       console.error(err)
-      setError('Could not start a new chat session.')
+      setError(err?.isAuthError ? err.message : 'Could not start a new chat session.')
     }
   }
 
@@ -114,10 +107,9 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
     if (!sessionToDelete) return
 
     try {
-      const response = await fetch(`${API_BASE}/api/context/chat/session/${sessionToDelete}`, {
+      await apiFetchJson(`/api/context/chat/session/${sessionToDelete}`, {
         method: 'DELETE'
       })
-      if (!response.ok) throw new Error('Failed to delete session')
       
       const updated = sessions.filter(s => s.id !== sessionToDelete)
       if (updated.length > 0) {
@@ -131,7 +123,7 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
       }
     } catch (err) {
       console.error(err)
-      setError('Failed to delete chat.')
+      setError(err?.isAuthError ? err.message : 'Failed to delete chat.')
     }
   }
 
@@ -144,14 +136,12 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
 
     const fetchMessages = async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/context/chat/messages/${currentSessionId}`)
-        if (!response.ok) throw new Error('Failed to fetch messages')
-        const data = await response.json()
+        const data = await apiFetchJson(`/api/context/chat/messages/${currentSessionId}`)
         setMessages(data.messages || [])
         setError(null)
       } catch (err) {
         console.error(err)
-        setError('Could not load messages.')
+          setError(err?.isAuthError ? err.message : 'Could not load messages.')
       }
     }
 
@@ -198,7 +188,7 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
     setMessages(prev => [...prev, tempUserMsg])
 
     try {
-      const response = await fetch(`${API_BASE}/api/context/chat`, {
+      const data = await apiFetchJson(`/api/context/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -210,15 +200,12 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
         })
       })
 
-      if (!response.ok) throw new Error('Chat request failed')
-      const data = await response.json()
 
       // Reload messages list from DB to ensure sync and IDs
-      const msgRes = await fetch(`${API_BASE}/api/context/chat/messages/${currentSessionId}`)
-      if (msgRes.ok) {
-        const msgData = await msgRes.json()
+      try {
+        const msgData = await apiFetchJson(`/api/context/chat/messages/${currentSessionId}`)
         setMessages(msgData.messages || [])
-      } else {
+      } catch {
         // Fallback: append response manually
         const reply = {
           id: `reply-${Date.now()}`,
@@ -230,7 +217,7 @@ export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' 
       }
     } catch (err) {
       console.error(err)
-      setError('Failed to send message.')
+      setError(err?.isAuthError ? err.message : 'Failed to send message.')
     } finally {
       setIsLoading(false)
     }

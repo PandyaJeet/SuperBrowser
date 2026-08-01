@@ -47,7 +47,35 @@ app.include_router(community.router, prefix="/api/search", tags=["Community"], d
 app.include_router(context.router, prefix="/api", tags=["Context"])
 app.include_router(pages.router, prefix="/api", tags=["Pages"])
 
-# ADD THIS:
+@app.on_event("startup")
+async def warn_if_session_token_missing():
+    """
+    verify_token fails closed: with no SUPERBROWSER_SESSION_TOKEN configured it
+    rejects every /api/search/* and /api/context/* request with HTTP 500
+    ("Server authentication not configured"). That is intentional, but a bare
+    500 gives no clue why, so say so loudly at startup instead.
+
+    The token itself is never logged.
+    """
+    if os.getenv("SUPERBROWSER_SESSION_TOKEN"):
+        print("[Startup] SUPERBROWSER_SESSION_TOKEN is configured.")
+        return
+
+    print("=" * 78)
+    print("[Startup] WARNING: SUPERBROWSER_SESSION_TOKEN is not set.")
+    print("")
+    print("  Every /api/search/* and /api/context/* request will fail with")
+    print('  HTTP 500 "Server authentication not configured" until you set it.')
+    print("")
+    print("  Generate a token:")
+    print("    python -c \"import secrets; print(secrets.token_urlsafe(32))\"")
+    print("")
+    print("  Then set SUPERBROWSER_SESSION_TOKEN in backend/.env, and set the")
+    print("  frontend's VITE_SUPERBROWSER_SESSION_TOKEN to the SAME value.")
+    print("  See the Configuration section of README.md.")
+    print("=" * 78)
+
+
 @app.on_event("startup")
 async def load_persisted_contexts():
     """
