@@ -415,7 +415,7 @@ export default function App() {
   }, [activeTabId, activeTab?.sessionId, loadContext])
 
 const updateTab = useCallback((tabId, updates) => {
-    setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t))
+    setTabs(prev => (prev ?? []).map(t => t.id === tabId ? { ...t, ...updates } : t))
   }, [])
 
   // Refactored clean search signature utilizing strict Electron IPC Tunneling
