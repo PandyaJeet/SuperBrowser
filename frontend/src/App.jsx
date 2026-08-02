@@ -931,7 +931,7 @@ const updateTab = useCallback((tabId, updates) => {
       if ((e.ctrlKey || e.metaKey) && ['1', '2', '3'].includes(e.key)) {
         e.preventDefault()
         const modes = ['seo', 'ai', 'community']
-        handleModeChange(modes[parseInt(e.key) - 1])
+        handleModeChange(modes[parseInt(e.key, 10) - 1])
         return
       }
 
