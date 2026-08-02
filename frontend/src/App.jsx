@@ -239,7 +239,7 @@ function createNewTab(sessionId = null) {
 }
 
 function getNextTabNumber(tabs) {
-  return Math.max(0, ...tabs.map(tab => Number(tab.tabNumber) || 0)) + 1
+  return Math.max(0, ...(tabs ?? []).map(tab => Number(tab.tabNumber) || 0)) + 1
 }
 
 function createInitialTabState(appSessionId) {
