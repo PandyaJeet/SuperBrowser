@@ -19,6 +19,7 @@ jobs:
       - name: Check if PR author has starred the repo
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.STARGAZER_TOKEN }}
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
