@@ -1,6 +1,13 @@
 import os
 import sys
 from pathlib import Path
+
+# Support launching from the repository root with
+# `python -m uvicorn backend.main:app`.
+backend_dir = Path(__file__).resolve().parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
+
 from utils.context_persistence import load_all_contexts
 from routers import pages  # ← This might already exist, check if it's missing
 
@@ -8,8 +15,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Run database setup if database/context_db.py does not exist
-backend_dir = Path(__file__).parent
-sys.path.append(str(backend_dir))
 db_file = backend_dir / "database" / "context_db.py"
 if not db_file.exists():
     import setup_database
