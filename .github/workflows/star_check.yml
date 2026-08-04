@@ -32,10 +32,21 @@ jobs:
               return;
             }
 
-            const stargazers = await github.paginate(
-              github.rest.activity.listStargazersForRepo,
-              { owner, repo, per_page: 100 }
-            );
+            let stargazers;
+            try {
+              stargazers = await github.paginate(
+                github.rest.activity.listStargazersForRepo,
+                { owner, repo, per_page: 100 }
+              );
+            } catch (error) {
+              if (error.status === 403) {
+                core.warning(
+                  'GitHub denied access to the stargazer list; skipping star verification.'
+                );
+                return;
+              }
+              throw error;
+            }
             const hasStarred = stargazers.some(u => u.login.toLowerCase() === author.toLowerCase());
 
             if (hasStarred) {
