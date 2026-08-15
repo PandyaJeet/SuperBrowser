@@ -1,5 +1,13 @@
 const { contextBridge, ipcRenderer } = require("electron");
-const path = require("path");
+
+const getArgument = (name, fallback = "") => {
+  const prefix = `--${name}=`;
+  const argument = process.argv.find((value) => value.startsWith(prefix));
+  return argument ? argument.slice(prefix.length) : fallback;
+};
+
+const backendUrl = getArgument("superbrowser-backend-url", "http://127.0.0.1:8000");
+const webviewPreloadPath = getArgument("superbrowser-webview-preload");
 
 function safeInvoke(channel, payload) {
   return ipcRenderer.invoke(channel, payload);
@@ -9,11 +17,13 @@ contextBridge.exposeInMainWorld("superBrowserDesktop", {
   platform: process.platform,
   isElectron: true,
   isIncognito: process.argv.includes("--superbrowser-incognito=1"),
-  backendUrl: process.env.SUPERBROWSER_BACKEND_URL || "http://127.0.0.1:8000",
-  webviewPreloadPath: "file://" + path.join(__dirname, "webview-preload.cjs"),
+  backendUrl,
+  webviewPreloadPath,
   backend: {
     getStatus: () => safeInvoke("backend:get-status"),
     getUrl: () => safeInvoke("backend:get-url"),
+    getProviderConfigPath: () => safeInvoke("backend:get-provider-config-path"),
+    openProviderConfig: () => safeInvoke("backend:open-provider-config"),
   },
   settings: {
     get: () => safeInvoke("settings:get"),
@@ -34,6 +44,7 @@ contextBridge.exposeInMainWorld("superBrowserDesktop", {
     getTab: (sessionId, tabId) => safeInvoke("context:get-tab", { sessionId, tabId }),
     getSession: (sessionId) => safeInvoke("context:get-session", { sessionId }),
     clearTab: (sessionId, tabId) => safeInvoke("context:clear-tab", { sessionId, tabId }),
+    clearSession: (sessionId) => safeInvoke("context:clear-session", { sessionId }),
     startSession: (sessionId) => safeInvoke("context:start-session", { sessionId }),
     stopSession: (sessionId, options) => safeInvoke("context:stop-session", { sessionId, options }),
     addQuery: (sessionId, tabId, query, mode) => safeInvoke("context:add-query", { sessionId, tabId, query, mode }),
@@ -45,7 +56,7 @@ contextBridge.exposeInMainWorld("superBrowserDesktop", {
   },
   search: {
     seo: (q, sessionId, persona, gl) => safeInvoke("search:seo", { q, sessionId, persona, gl }),
-    ai: (q, sessionId, persona, gl) => safeInvoke("search:ai", { q, sessionId, persona, gl }),
+    ai: (q, sessionId, persona, gl, context) => safeInvoke("search:ai", { q, sessionId, persona, gl, context }),
     community: (q, sessionId, persona, gl) => safeInvoke("search:community", { q, sessionId, persona, gl }),
   },
   app: {

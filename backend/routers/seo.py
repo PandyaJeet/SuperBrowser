@@ -26,10 +26,12 @@ from utils.sanitize import sanitize_query
 
 router = APIRouter()
 SEO_TARGET_RESULTS = 10
-SEO_FAST_RESPONSE_TIMEOUT = 0.8
-SEO_EXTRA_WAIT_TIMEOUT = 0.2
-ENGINE_API_GRACE_TIMEOUT = 0.15
-WIKIPEDIA_FALLBACK_TIMEOUT = 0.6
+# Allow the configured SerpAPI timeout (2.8s) and scraper fallback enough time
+# to finish before cancelling valid provider work.
+SEO_FAST_RESPONSE_TIMEOUT = 3.0
+SEO_EXTRA_WAIT_TIMEOUT = 1.5
+ENGINE_API_GRACE_TIMEOUT = 0.3
+WIKIPEDIA_FALLBACK_TIMEOUT = 1.5
 
 
 # ── Response Models (NEW) ───────────────────────────────────

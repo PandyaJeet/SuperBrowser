@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useState } from 'react'
+import { motion as Motion, AnimatePresence } from 'framer-motion'
 
 const ChevronLeft = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
@@ -46,7 +46,7 @@ export function ContinuousPagination({ totalPages = 5, defaultPage = 1, onPageCh
           {pages.map((page) => {
             const isActive = currentPage === page
             return (
-              <motion.button
+              <Motion.button
                 layout
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -59,14 +59,14 @@ export function ContinuousPagination({ totalPages = 5, defaultPage = 1, onPageCh
                 }`}
               >
                 {isActive && (
-                  <motion.div
+                  <Motion.div
                     layoutId="active-pagination-indicator"
                     className="absolute inset-0 bg-[#3279f9]/10 rounded-full border border-[#3279f9]/20 -z-10"
                     transition={{ type: "spring", stiffness: 500, damping: 35 }}
                   />
                 )}
                 <span className="absolute inset-0 flex items-center justify-center">{page}</span>
-              </motion.button>
+              </Motion.button>
             )
           })}
         </AnimatePresence>

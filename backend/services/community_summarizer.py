@@ -43,7 +43,11 @@ async def get_community_insights(query: str) -> dict:
     stack_context = ""
     for q in stack_results[:2]:
         stack_context += f"Q: {q.get('title', '')}\n"
-        for ans in q.get("answers", [])[:2]:
+        answers = q.get("answers") or ([{
+            "body": q.get("answer_body", ""),
+            "score": q.get("answer_score", 0),
+        }] if q.get("answer_body") else [])
+        for ans in answers[:2]:
             stack_context += f"A (score {ans.get('score', 0)}): {ans.get('body', '')[:500]}\n"
         stack_context += "\n"
 

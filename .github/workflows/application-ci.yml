@@ -1,0 +1,70 @@
+name: Application CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      SUPERBROWSER_SESSION_TOKEN: ci-session-token
+      CONTEXT_STORE_DIR: ${{ github.workspace }}\backend\.ci-context
+      SUPERBROWSER_DATA_DIR: ${{ github.workspace }}\backend\.ci-data
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-build.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: python -m pip install -r requirements.txt
+
+      - name: Validate backend
+        working-directory: backend
+        run: |
+          python -m compileall -q main.py desktop_backend_entry.py database routers scrapers services utils
+          python -m pytest -q
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Validate frontend
+        working-directory: frontend
+        run: |
+          npm run lint
+          npm run build
+
+      - name: Build self-contained backend
+        working-directory: frontend
+        run: npm run build:backend
+
+      - name: Package Electron application
+        working-directory: frontend
+        run: npx electron-builder --dir
+
+      - name: Verify packaged backend
+        shell: pwsh
+        run: |
+          $backend = "frontend\release\win-unpacked\resources\backend\superbrowser-backend.exe"
+          if (-not (Test-Path $backend)) {
+            throw "Packaged backend executable is missing: $backend"
+          }

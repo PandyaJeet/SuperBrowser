@@ -36,7 +36,7 @@ const LoadingDots = () => (
   </div>
 )
 
-export function ChatSidebar({ tabId, appSessionId, onClose, persona = 'default' }) {
+export function ChatSidebar({ tabId, appSessionId, onClose }) {
   const [sessions, setSessions] = useState([])
   const [currentSessionId, setCurrentSessionId] = useState('')
   const [messages, setMessages] = useState([])

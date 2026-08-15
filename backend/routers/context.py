@@ -135,6 +135,7 @@ class ExportSessionResponse(BaseModel):
 class ClearResponse(BaseModel):
     status: str
     message: str
+    session: Optional[SessionInfo] = None
 
 
 class AddQueryResponse(BaseModel):
@@ -364,6 +365,7 @@ async def update_context(update: ContextUpdate):
         tab_context["results"] = [r.dict() for r in update.results]
     if update.visited_pages is not None:
         tab_context["visited_pages"] = [p.dict() for p in update.visited_pages]
+    save_context(update.session_id, update.tab_id, tab_context)
     return {
         "status": "success",
         "message": "Context updated",
@@ -418,32 +420,59 @@ async def get_session_context(session_id: str, x_session_secret: str = Header(de
 
 
 @router.delete(
+    "/context/clear/{session_id}/{tab_id}",
+    response_model=ClearResponse,
+    summary="Clear one tab context",
+    description="Removes one tab from memory and persistent context storage."
+)
+async def clear_tab_context(session_id: str, tab_id: str):
+    failed_paths = delete_context(session_id, tab_id)
+    if failed_paths:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not remove persisted tab context: {', '.join(failed_paths)}",
+        )
+
+    session_tabs = _context_store.get(session_id)
+    if session_tabs is not None:
+        session_tabs.pop(tab_id, None)
+        if not session_tabs:
+            _context_store.pop(session_id, None)
+    return {"status": "success", "message": "Tab context cleared successfully"}
+
+
+@router.delete(
     "/context/clear/{session_id}",
     response_model=ClearResponse,
     summary="Clear complete session workspace",
-    description="Wipes all in-memory tab contexts, session metadata, and persistent AI chat histories for complete user privacy."
+    description="Wipes all workspace data and initializes a fresh session with the same session ID."
 )
 async def clear_session_context(session_id: str):
-    # 1. Wipe temporary in-memory browser tab tracking
-    if session_id in _context_store:
-        del _context_store[session_id]
-        
-    # 2. Wipe temporary session tracking metadata
-    if session_id in _session_store:
-        del _session_store[session_id]
-        
-    # 3. Wipe persistent AI chat histories and sessions from the Database
+    failed_paths = delete_context(session_id)
+    if failed_paths:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not remove persisted session context: {', '.join(failed_paths)}",
+        )
+
     try:
         db = get_context_db()
         db.clear_chat_history(session_id)
         db.delete_chat_session(session_id)
-    except Exception as e:
-        # Prevents an error from crashing the response if a session didn't have active chats
-        print(f"Database clean up note: {e}")
+    except Exception as exc:
+        print(f"Database clean up failed: {exc}")
+        raise HTTPException(status_code=500, detail="Could not remove persisted AI chat history") from exc
 
-    delete_context(session_id)
+    _context_store.pop(session_id, None)
+    _session_store.pop(session_id, None)
+    _chat_history.pop(session_id, None)
 
-    return {"status": "success", "message": "Entire workspace and AI context wiped successfully"}
+    _ensure_session(session_id)
+    return {
+        "status": "success",
+        "message": "Entire workspace and AI context wiped successfully",
+        "session": _session_store[session_id].copy(),
+    }
 
 
 
@@ -574,6 +603,7 @@ async def chat_with_context(
     app_session_id: Optional[str] = Body(None),
 ):
     db = get_context_db()
+    db.create_chat_session(session_id, tab_id or "context")
     user_msg_id = f"msg_{datetime.now().timestamp()}_{uuid.uuid4().hex[:6]}"
     db.save_chat_message(user_msg_id, session_id, "user", message, model)
     history = db.get_chat_messages(session_id)

@@ -100,7 +100,7 @@ export function buildMarkdownExport({ mode, query = '', results = {}, createdAt 
 
 export function getMarkdownExportFilename(mode, query = '', date = new Date()) {
   const datePart = date.toISOString().slice(0, 10)
-  return `superbrowser-${slugify(mode || 'export')}-${datePart}.md`
+  return `superbrowser-${slugify(query || mode || 'export')}-${datePart}.md`
 }
 
 export function downloadMarkdownExport({ mode, query, results }) {

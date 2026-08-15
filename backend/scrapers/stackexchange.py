@@ -112,6 +112,11 @@ async def scrape_stackexchange(query: str) -> list[dict]:
                     "answer_body": answer["answer_body"] if answer else None,
                     "answer_score": answer["answer_score"] if answer else None,
                     "is_accepted": answer["is_accepted"] if answer else None,
+                    "answers": [{
+                        "body": answer["answer_body"],
+                        "score": answer["answer_score"],
+                        "is_accepted": answer["is_accepted"],
+                    }] if answer else [],
                 }
                 results.append(result)
 

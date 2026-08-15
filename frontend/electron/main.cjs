@@ -1,4 +1,5 @@
 const path = require("path");
+const { pathToFileURL } = require("url");
 const fs = require("fs");
 const net = require("net");
 const { spawn } = require("child_process");
@@ -27,6 +28,7 @@ let tray = null;
 let downloads = [];
 let downloadsFolderCache = { ts: 0, items: [] };
 const trackedDownloadSessions = new WeakSet();
+const contextSessionSecrets = new Map();
 let backendStatus = {
   running: false,
   url: backendBaseUrl,
@@ -63,6 +65,28 @@ function writeSettings(nextSettings) {
   const merged = { ...current, ...nextSettings };
   fs.writeFileSync(getSettingsPath(), JSON.stringify(merged, null, 2), "utf8");
   return merged;
+}
+
+function getProviderConfigPath() {
+  return path.join(app.getPath("userData"), "provider-credentials.txt");
+}
+
+function ensureProviderConfigFile() {
+  const configPath = getProviderConfigPath();
+  if (!fs.existsSync(configPath)) {
+    fs.writeFileSync(
+      configPath,
+      [
+        "# SuperBrowser desktop provider credentials.",
+        "# Add keys below, save this file, then restart SuperBrowser.",
+        "GROQ_API_KEY=",
+        "SERPAPI_API_KEY=",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  }
+  return configPath;
 }
 
 function logEvent(level, message, meta = {}) {
@@ -390,20 +414,30 @@ async function findAvailablePort(startPort = DEFAULT_BACKEND_PORT, maxTries = 50
   throw new Error("No available backend port found.");
 }
 
-async function waitForBackendReady(url, timeoutMs = 20000) {
+async function waitForBackendReady(url, timeoutMs = 20000, child = null) {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
+  let childStopped = false;
+  const markStopped = () => { childStopped = true; };
+  child?.once("error", markStopped);
+  child?.once("exit", markStopped);
+
+  try {
+    while (!childStopped && Date.now() - startedAt < timeoutMs) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const res = await fetch(`${url}/health`);
+        if (res.ok) return true;
+      } catch {
+        // retry until the process exits or the deadline expires
+      }
       // eslint-disable-next-line no-await-in-loop
-      const res = await fetch(`${url}/health`);
-      if (res.ok) return true;
-    } catch {
-      // retry
+      await new Promise((resolve) => setTimeout(resolve, 400));
     }
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, 400));
+    return false;
+  } finally {
+    child?.removeListener("error", markStopped);
+    child?.removeListener("exit", markStopped);
   }
-  return false;
 }
 
 function resolveBackendDir() {
@@ -441,6 +475,10 @@ function spawnBackend(pythonCmd, pythonArgs, port) {
   child.stderr.on("data", (chunk) => {
     logBackendOutput(process.stderr, chunk);
   });
+  child.on("error", (error) => {
+    backendStatus = { ...backendStatus, running: false, lastError: String(error.message || error) };
+    logEvent("error", "Backend process failed", { command: pythonCmd, error: String(error.message || error) });
+  });
 
   return child;
 }
@@ -456,8 +494,18 @@ async function startBackend() {
     writeSettings({ sessionToken: settings.sessionToken });
   }
   process.env.SUPERBROWSER_SESSION_TOKEN = settings.sessionToken;
+  const userDataDir = app.getPath("userData");
+  process.env.SUPERBROWSER_DATA_DIR = path.join(userDataDir, "data");
+  process.env.CONTEXT_STORE_DIR = path.join(userDataDir, "contexts");
+  process.env.SUPERBROWSER_ENV_FILE = ensureProviderConfigFile();
 
-  backendStatus = { running: false, url: backendBaseUrl, pid: null, lastError: null };
+  backendStatus = {
+    running: false,
+    url: backendBaseUrl,
+    pid: null,
+    lastError: null,
+    providerConfigPath: process.env.SUPERBROWSER_ENV_FILE,
+  };
 
   const packagedExe = resolvePackagedBackendExecutable();
   if (packagedExe) {
@@ -470,7 +518,11 @@ async function startBackend() {
     });
     backendProcess.stdout.on("data", (chunk) => logBackendOutput(process.stdout, chunk));
     backendProcess.stderr.on("data", (chunk) => logBackendOutput(process.stderr, chunk));
-    const ready = await waitForBackendReady(backendBaseUrl, 30000);
+    backendProcess.on("error", (error) => {
+      backendStatus = { ...backendStatus, running: false, lastError: String(error.message || error) };
+      logEvent("error", "Packaged backend process failed", { error: String(error.message || error) });
+    });
+    const ready = await waitForBackendReady(backendBaseUrl, 30000, backendProcess);
     if (!ready) {
       stopBackend();
       throw new Error("Packaged backend executable failed to start.");
@@ -484,6 +536,10 @@ async function startBackend() {
     return;
   }
 
+  if (app.isPackaged) {
+    throw new Error("Packaged backend executable is missing from application resources.");
+  }
+
   const candidates = [
     { cmd: process.env.PYTHON_PATH || "python", args: [] },
     { cmd: "py", args: ["-3"] },
@@ -493,7 +549,7 @@ async function startBackend() {
   for (const candidate of candidates) {
     try {
       backendProcess = spawnBackend(candidate.cmd, candidate.args, port);
-      const ready = await waitForBackendReady(backendBaseUrl, 30000);
+      const ready = await waitForBackendReady(backendBaseUrl, 30000, backendProcess);
       if (ready) {
         started = true;
         backendStatus = {
@@ -504,9 +560,9 @@ async function startBackend() {
         };
         break;
       }
-      backendProcess.kill();
+      if (backendProcess && !backendProcess.killed) backendProcess.kill();
     } catch {
-      if (backendProcess) backendProcess.kill();
+      if (backendProcess && !backendProcess.killed) backendProcess.kill();
     }
   }
 
@@ -540,6 +596,13 @@ function registerIpcHandlers() {
 
   ipcMain.handle("backend:get-status", () => backendStatus);
   ipcMain.handle("backend:get-url", () => backendBaseUrl);
+  ipcMain.handle("backend:get-provider-config-path", () => ensureProviderConfigFile());
+  ipcMain.handle("backend:open-provider-config", async () => {
+    const configPath = ensureProviderConfigFile();
+    const openError = await shell.openPath(configPath);
+    if (openError) throw new Error(openError);
+    return { path: configPath };
+  });
 
   ipcMain.handle("settings:get", () => readSettings());
   ipcMain.handle("settings:set", (_, partialSettings) => {
@@ -557,7 +620,10 @@ function registerIpcHandlers() {
       body: JSON.stringify({ session_id: sessionId })
     });
     if (!res.ok) throw new Error(`Failed to start session: ${res.status}`);
-    return res.json();
+    const data = await res.json();
+    const secret = data?.session?.secret;
+    if (secret) contextSessionSecrets.set(sessionId, secret);
+    return data;
   });
 
   ipcMain.handle("context:stop-session", async (_, { sessionId, options }) => {
@@ -602,9 +668,26 @@ function registerIpcHandlers() {
     return res.json();
   });
 
-  ipcMain.handle("search:ai", async (_, { q, sessionId, persona, gl }) => {
-    const params = new URLSearchParams({ q, session_id: sessionId || "", persona: persona || "default", gl: gl || "us" });
-    const res = await fetchContext(`/api/search/ai?${params.toString()}`);
+  ipcMain.handle("search:ai", async (_, { q, sessionId, persona, gl, context }) => {
+    const hasContext = context && [context.queries, context.results, context.visited_pages]
+      .some((items) => Array.isArray(items) && items.length > 0);
+    const res = hasContext
+      ? await fetchContext("/api/search/ai/contextual", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: q,
+            persona: persona || "default",
+            region: gl || "us",
+            context,
+          }),
+        })
+      : await fetchContext(`/api/search/ai?${new URLSearchParams({
+          q,
+          session_id: sessionId || "",
+          persona: persona || "default",
+          gl: gl || "us",
+        }).toString()}`);
     if (!res.ok) throw new Error(`AI Search failed: ${res.status}`);
     return res.json();
   });
@@ -630,7 +713,10 @@ function registerIpcHandlers() {
 
   ipcMain.handle("context:export-session", async (_, { sessionId }) => {
     validateString(sessionId, "sessionId");
-    const res = await fetchContext(`/api/context/export/${sessionId}`);
+    const secret = contextSessionSecrets.get(sessionId) || "";
+    const res = await fetchContext(`/api/context/export/${sessionId}`, {
+      headers: { "X-Session-Secret": secret },
+    });
     if (!res.ok) throw new Error(`Failed to export session context: ${res.status}`);
     return res.json();
   });
@@ -662,7 +748,10 @@ function registerIpcHandlers() {
 
   ipcMain.handle("context:get-session", async (_, { sessionId }) => {
     validateString(sessionId, "sessionId");
-    const res = await fetchContext(`/api/context/session/${sessionId}`);
+    const secret = contextSessionSecrets.get(sessionId) || "";
+    const res = await fetchContext(`/api/context/session/${sessionId}`, {
+      headers: { "X-Session-Secret": secret },
+    });
     if (!res.ok) throw new Error(`Failed to fetch session context: ${res.status}`);
     return res.json();
   });
@@ -675,6 +764,22 @@ function registerIpcHandlers() {
     });
     if (!res.ok) throw new Error(`Failed to clear tab context: ${res.status}`);
     return res.json();
+  });
+
+  ipcMain.handle("context:clear-session", async (_, { sessionId }) => {
+    validateString(sessionId, "sessionId");
+    const res = await fetchContext(`/api/context/clear/${sessionId}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) throw new Error(`Failed to clear session context: ${res.status}`);
+    const data = await res.json();
+    const replacementSecret = data?.session?.secret;
+    if (replacementSecret) {
+      contextSessionSecrets.set(sessionId, replacementSecret);
+    } else {
+      contextSessionSecrets.delete(sessionId);
+    }
+    return data;
   });
 
   ipcMain.handle("app:notify", (_, { title, body }) => {
@@ -842,6 +947,12 @@ function createMainWindow(options = {}) {
   const tempSession = options.tempSession;
   const settings = readSettings();
   const bounds = settings.windowBounds || {};
+  const additionalArguments = [
+    `--superbrowser-backend-url=${backendBaseUrl}`,
+    `--superbrowser-webview-preload=${pathToFileURL(path.join(__dirname, "webview-preload.cjs")).href}`,
+  ];
+  if (incognito) additionalArguments.push("--superbrowser-incognito=1");
+
   const win = new BrowserWindow({
     width: bounds.width || 1280,
     height: bounds.height || 800,
@@ -859,7 +970,7 @@ function createMainWindow(options = {}) {
       sandbox: !isDev,
       devTools: isDev,
       partition: windowPartition,
-      additionalArguments: incognito ? ["--superbrowser-incognito=1"] : [],
+      additionalArguments,
     },
   });
   registerDownloadTracking(win.webContents.session);
@@ -933,10 +1044,17 @@ app.whenReady().then(() => {
       }
     });
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+  app.on("activate", async () => {
+    if (BrowserWindow.getAllWindows().length !== 0) return;
+    if (!backendStatus.running) {
+      try {
+        await startBackend();
+      } catch (error) {
+        backendStatus = { ...backendStatus, running: false, lastError: String(error.message || error) };
+        logEvent("error", "Backend restart failed", { error: backendStatus.lastError });
+      }
     }
+    createMainWindow();
   });
 });
 
@@ -959,8 +1077,8 @@ app.on("open-url", (event, url) => {
 });
 
 app.on("window-all-closed", () => {
-  stopBackend();
   if (process.platform !== "darwin") {
+    stopBackend();
     app.quit();
   }
 });

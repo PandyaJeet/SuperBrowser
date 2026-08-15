@@ -15,7 +15,7 @@ SuperBrowser pairs a **multi-engine search aggregator** with a **context-aware A
 ![React](https://img.shields.io/badge/React_19-20232A?style=flat-square&logo=react&logoColor=61DAFB)
 ![Vite](https://img.shields.io/badge/Vite-646CFF?style=flat-square&logo=vite&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
-![Python](https://img.shields.io/badge/Python_3.8+-3776AB?style=flat-square&logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python_3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Electron](https://img.shields.io/badge/Electron-2C2E3B?style=flat-square&logo=electron&logoColor=9FEAF9)
 ![TailwindCSS](https://img.shields.io/badge/Tailwind-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)
 ![Groq](https://img.shields.io/badge/Groq-F55036?style=flat-square&logo=groq&logoColor=white)
@@ -149,7 +149,7 @@ SuperBrowser is a **decoupled two-tier app**: a React/Vite frontend talks to a F
         └───────────────┘                    └────────────────────┘
 ```
 
-> **Note:** Context is held **in memory** on the backend (no database), scoped per `session_id` → `tab_id`, with a 1-hour idle TTL. It persists for the life of the server process and can be exported to JSON at any time.
+> **Note:** Browsing context is scoped per `session_id` → `tab_id`, cached in memory, and persisted as JSON under `CONTEXT_STORE_DIR`. Context-chat messages use SQLite. Both locations can be redirected to durable storage.
 
 ---
 
@@ -159,7 +159,7 @@ SuperBrowser is a **decoupled two-tier app**: a React/Vite frontend talks to a F
 |---|---|
 | **Frontend** | React 19, Vite, TailwindCSS, Framer Motion, Three.js / React Three Fiber, Recharts |
 | **Desktop** | Electron 39, electron-builder (NSIS · DMG · AppImage) |
-| **Backend** | Python 3.8+, FastAPI, Uvicorn, httpx, BeautifulSoup4, cachetools |
+| **Backend** | Python 3.10+, FastAPI, Uvicorn, httpx, BeautifulSoup4, cachetools |
 | **AI & Search** | Groq (Llama 3.1/3.3, Mixtral, Gemma), SerpAPI, custom scrapers |
 | **Hosting / CI** | Firebase Hosting, GitHub Actions |
 
@@ -169,8 +169,8 @@ SuperBrowser is a **decoupled two-tier app**: a React/Vite frontend talks to a F
 
 ### Prerequisites
 
-- **Node.js** ≥ 16 and **npm**
-- **Python** ≥ 3.8 and **pip**
+- **Node.js** 20.19+ or 22.12+ and **npm**
+- **Python** 3.10+ and **pip**
 - API keys for [**SerpAPI**](https://serpapi.com) and [**Groq**](https://console.groq.com) (see [Configuration](#-configuration))
 
 ### 1. Clone the repo
@@ -288,6 +288,13 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 > token on first launch, stores it in `settings.json`, passes it to the backend it
 > spawns, and attaches it over IPC — so it never reaches renderer JavaScript.
 >
+> Live desktop search and AI still require provider credentials. In the desktop
+> app, open **Settings → Open provider key file**, add `SERPAPI_API_KEY` and
+> `GROQ_API_KEY`, save, and restart SuperBrowser. Electron creates this per-user
+> `provider-credentials.txt` file in its user-data directory and passes it to the
+> bundled backend through `SUPERBROWSER_ENV_FILE`; credentials are not embedded
+> in the installer. Existing process environment variables take precedence.
+>
 > **Note:** `VITE_*` values are bundled into the client build and are visible to
 > anyone who loads the page. This token gates a self-hosted backend; it is not a
 > per-user credential.
@@ -312,7 +319,9 @@ npm run dist:mac     # macOS    → .dmg
 npm run dist:linux   # Linux    → .AppImage
 ```
 
-In desktop mode the app talks to the backend over `http://127.0.0.1:8000` and cleanly terminates the backend process on exit. A single-instance lock prevents duplicate windows.
+The distribution commands first build an isolated, pinned PyInstaller environment under `backend/.pyi-build`, produce a self-contained backend executable, and then bundle it with Electron. Python is required on the build machine but is not required on an end user's machine.
+
+In desktop mode Electron selects an available loopback port, injects the endpoint through the preload bridge, stores app data under Electron's user-data directory, and terminates the backend process on application exit. A single-instance lock prevents duplicate primary instances.
 
 ---
 

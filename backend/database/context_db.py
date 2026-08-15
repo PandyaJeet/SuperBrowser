@@ -3,6 +3,7 @@ Context Database Manager - Handles persistent storage of browsing history and co
 """
 import sqlite3
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -12,9 +13,9 @@ class ContextDatabase:
     def __init__(self, db_path: str = None):
         """Initialize database connection"""
         if db_path is None:
-            # Default to backend/data directory
-            base_dir = Path(__file__).parent.parent / "data"
-            base_dir.mkdir(exist_ok=True)
+            configured_dir = os.environ.get("SUPERBROWSER_DATA_DIR")
+            base_dir = Path(configured_dir) if configured_dir else Path(__file__).parent.parent / "data"
+            base_dir.mkdir(parents=True, exist_ok=True)
             db_path = str(base_dir / "browsing_context.db")
         
         self.db_path = db_path
@@ -307,7 +308,7 @@ class ContextDatabase:
         """Create a new chat session"""
         cursor = self.conn.cursor()
         cursor.execute(
-            "INSERT INTO chat_sessions (id, tab_id, created_at) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO chat_sessions (id, tab_id, created_at) VALUES (?, ?, ?)",
             (session_id, tab_id, datetime.now().isoformat())
         )
         self.conn.commit()

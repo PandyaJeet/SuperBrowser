@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from services.super_ai import get_ai_consensus
 from utils.sanitize import sanitize_query
@@ -24,10 +24,17 @@ class AISource(BaseModel):
     snippet: Optional[str] = None
 
 class AIResponse(BaseModel):
+    query: Optional[str] = None
     answer: Optional[str] = None
-    sources: Optional[List[AISource]] = []
+    sources: List[AISource] = Field(default_factory=list)
     persona: Optional[str] = None
+    persona_used: Optional[str] = None
+    model_used: Optional[str] = None
     region: Optional[str] = None
+    context_used: Optional[bool] = None
+    live_data: bool = False
+    sources_scraped: int = 0
+    status: Optional[str] = None
     context_stats: Optional[Dict] = None
 
 

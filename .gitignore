@@ -44,6 +44,7 @@ build/
 # Packaged desktop artifacts
 frontend/release/
 backend/superbrowser-backend.exe
+backend/superbrowser-backend
 backend/.pyi-build/
 backend/*.spec
 

@@ -1,7 +1,7 @@
 import { Suspense, lazy, useState, useCallback, useEffect, useRef } from 'react'
-import { clearEntireSessionWorkspace, useContextManager } from './useContextManager'
+import { useContextManager } from './useContextManager'
 import { getApiBase } from './config/apiBase'
-import { apiFetch, apiFetchJson } from './lib/apiFetch'
+import { apiFetchJson } from './lib/apiFetch'
 
 const LazyCommunityResults = lazy(() => import('./components/CommunityResults'))
 const LazyBackgroundOrb = lazy(() => import('./components/BackgroundOrb'))
@@ -23,6 +23,8 @@ const THEME_STORAGE_KEY = 'super-browser-theme'
 const WEB_DOWNLOADS_STORAGE_KEY = 'superbrowser-web-downloads'
 const WEB_HISTORY_STORAGE_KEY = 'superbrowser-web-history'
 const BOOKMARKS_STORAGE_KEY = 'super-browser-bookmarks'
+const APP_SESSION_STORAGE_KEY = 'superbrowser-app-session-id'
+const TAB_STATE_STORAGE_KEY = 'superbrowser-tab-state'
 
 function isIncognitoRuntime() {
   if (window.superBrowserDesktop?.isIncognito) return true
@@ -272,6 +274,47 @@ function normalizeTabState(state, appSessionId) {
   }
 }
 
+function getInitialAppSessionId() {
+  if (isIncognitoRuntime()) return crypto.randomUUID()
+  try {
+    const stored = window.localStorage.getItem(APP_SESSION_STORAGE_KEY)
+    if (stored) return stored
+    const sessionId = crypto.randomUUID()
+    window.localStorage.setItem(APP_SESSION_STORAGE_KEY, sessionId)
+    return sessionId
+  } catch {
+    return crypto.randomUUID()
+  }
+}
+
+function getInitialTabState(appSessionId) {
+  if (isIncognitoRuntime()) return createInitialTabState(appSessionId)
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(TAB_STATE_STORAGE_KEY) || 'null')
+    if (!parsed || !Array.isArray(parsed.tabs)) return createInitialTabState(appSessionId)
+    return normalizeTabState({
+      ...parsed,
+      tabs: parsed.tabs.map(tab => ({
+        ...tab,
+        sessionId: tab.sessionId || appSessionId,
+        loading: false,
+        error: null,
+      })),
+    }, appSessionId)
+  } catch {
+    return createInitialTabState(appSessionId)
+  }
+}
+
+function collectContextResults(data) {
+  if (Array.isArray(data?.results)) return data.results
+  if (Array.isArray(data?.sources)) return data.sources
+
+  return ['stack_results', 'reddit_results', 'hn_results', 'devto_results']
+    .flatMap(key => Array.isArray(data?.[key]) ? data[key] : [])
+    .slice(0, 50)
+}
+
 /* ── SVG Icons ── */
 const SearchIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>
@@ -302,13 +345,12 @@ const ChevronDownIcon = () => <svg width="12" height="12" viewBox="0 0 24 24" fi
 
 export default function App() {
   const [theme, setTheme] = useState(getInitialTheme)
-  const [appSessionId] = useState(() => crypto.randomUUID())
-  const [sessionStartedAt] = useState(() => new Date().toISOString())
-  const [sessionStatus, setSessionStatus] = useState("starting")
+  const [appSessionId] = useState(getInitialAppSessionId)
+  const [, setSessionStatus] = useState("starting")
 
   const searchInputHomeRef = useRef(null)
   const searchInputHeaderRef = useRef(null)
-  const [tabState, setTabState] = useState(() => createInitialTabState(appSessionId))
+  const [tabState, setTabState] = useState(() => getInitialTabState(appSessionId))
 
   const tabs = tabState.tabs
   const activeTabId = tabState.activeTabId
@@ -380,6 +422,16 @@ export default function App() {
   }, [theme, isIncognito])
 
   useEffect(() => {
+    if (isIncognito) return
+    try {
+      window.localStorage.setItem(APP_SESSION_STORAGE_KEY, appSessionId)
+      window.localStorage.setItem(TAB_STATE_STORAGE_KEY, JSON.stringify(tabState))
+    } catch (error) {
+      console.warn('Could not persist tab state:', error)
+    }
+  }, [appSessionId, isIncognito, tabState])
+
+  useEffect(() => {
     console.log(`[App] App initialized:`, {
       activeTabId,
       totalTabs: tabs.length,
@@ -414,57 +466,94 @@ export default function App() {
     }
   }, [activeTabId, activeTab?.sessionId, loadContext])
 
-const updateTab = useCallback((tabId, updates) => {
+  const updateTab = useCallback((tabId, updates) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t))
-  }, [])
+  }, [setTabs])
+
+  const recordHistoryItem = useCallback((item) => {
+    if (isIncognito || !item) return
+    const entry = {
+      ...item,
+      id: item.id || crypto.randomUUID(),
+      timestamp: item.timestamp || new Date().toISOString(),
+    }
+    const identity = entry.type === 'page'
+      ? `page:${entry.url}`
+      : `search:${entry.mode || 'seo'}:${entry.query}`
+
+    setBrowserHistory(current => {
+      const next = [
+        entry,
+        ...current.filter(existing => {
+          const existingIdentity = existing.type === 'page'
+            ? `page:${existing.url}`
+            : `search:${existing.mode || 'seo'}:${existing.query}`
+          return existingIdentity !== identity
+        }),
+      ].slice(0, 200)
+      writeWebHistory(next)
+      return next
+    })
+  }, [isIncognito])
 
   // Refactored clean search signature utilizing strict Electron IPC Tunneling
   const performSearch = useCallback((tabId, tabData, searchPersona = "default") => {
-    const prev = searchControllersRef.current[tabId]
-    if (prev) prev.abort()
+    const previousController = searchControllersRef.current[tabId]
+    if (previousController) previousController.abort()
     const controller = new AbortController()
     searchControllersRef.current[tabId] = controller
-    
+
+    const isCurrentRequest = () => searchControllersRef.current[tabId] === controller
+
     const onSuccess = (data) => {
-      setTabs(p => p.map(t => t.id === tabId ? { ...t, results: data, loading: false } : t))
-      if (Array.isArray(data?.results) && data.results.length > 0) {
-        contextManager.addResults(tabId, tabData.sessionId, data.results)
+      if (!isCurrentRequest()) return
+      setTabs(currentTabs => currentTabs.map(tab => tab.id === tabId
+        ? { ...tab, results: data, loading: false, error: null }
+        : tab))
+
+      const contextResults = collectContextResults(data)
+      if (!isIncognito && contextResults.length > 0) {
+        contextManager.addResults(tabId, tabData.sessionId, contextResults)
       }
     }
 
     const onError = (error) => {
-      if (error?.name === 'AbortError') {
-        console.log(`[Search] Request aborted for tab ${tabId}`)
-        return
-      }
+      if (error?.name === 'AbortError' || !isCurrentRequest()) return
       console.error(`[Search] Error for tab ${tabId}:`, error)
-      // An auth failure is a configuration problem, not an upstream outage.
-      // Surface it instead of masking it with instant results, which would
-      // leave the user staring at canned links with no idea anything is wrong.
+
       if (error?.isAuthError) {
-        setTabs(p => p.map(t => t.id === tabId ? { ...t, error: error.message, loading: false, results: null } : t))
+        setTabs(currentTabs => currentTabs.map(tab => tab.id === tabId
+          ? { ...tab, error: error.message, loading: false, results: null }
+          : tab))
         return
       }
       if (tabData.activeMode === 'seo') {
         const fallbackData = createInstantSearchResults(tabData.query)
-        setTabs(p => p.map(t => t.id === tabId ? { ...t, error: null, loading: false, results: fallbackData } : t))
+        setTabs(currentTabs => currentTabs.map(tab => tab.id === tabId
+          ? { ...tab, error: null, loading: false, results: fallbackData }
+          : tab))
         if (!isIncognito) contextManager.addResults(tabId, tabData.sessionId, fallbackData.results)
         return
       }
       if (tabData.activeMode === 'ai') {
         const fallbackData = createInstantAiResults(tabData.query, searchPersona)
-        setTabs(p => p.map(t => t.id === tabId ? { ...t, error: null, loading: false, results: fallbackData } : t))
+        setTabs(currentTabs => currentTabs.map(tab => tab.id === tabId
+          ? { ...tab, error: null, loading: false, results: fallbackData }
+          : tab))
         if (!isIncognito) contextManager.addResults(tabId, tabData.sessionId, fallbackData.sources || [])
         return
       }
       const errorMessage = error?.message || "Search failed. Please try again."
-      setTabs(p => p.map(t => t.id === tabId ? { ...t, error: errorMessage, loading: false, results: null } : t))
+      setTabs(currentTabs => currentTabs.map(tab => tab.id === tabId
+        ? { ...tab, error: errorMessage, loading: false, results: null }
+        : tab))
     }
-    const onDone = () => { 
-      if (searchControllersRef.current[tabId] === controller) delete searchControllersRef.current[tabId] 
+
+    const onDone = () => {
+      if (isCurrentRequest()) delete searchControllersRef.current[tabId]
     }
-    
-    // Core Logic: Always check for Electron IPC Bridge availability first
+
+    const context = contextManager.getAIContext(tabId)
     const isElectron = Boolean(window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.search)
 
     if (isElectron) {
@@ -474,7 +563,7 @@ const updateTab = useCallback((tabId, updates) => {
       if (tabData.activeMode === 'seo') {
         bridgePromise = searchBridge.seo(tabData.query, tabData.sessionId, searchPersona, userRegion)
       } else if (tabData.activeMode === 'ai') {
-        bridgePromise = searchBridge.ai(tabData.query, tabData.sessionId, searchPersona, userRegion)
+        bridgePromise = searchBridge.ai(tabData.query, tabData.sessionId, searchPersona, userRegion, context)
       } else if (tabData.activeMode === 'community') {
         bridgePromise = searchBridge.community(tabData.query, tabData.sessionId, searchPersona, userRegion)
       }
@@ -485,37 +574,76 @@ const updateTab = useCallback((tabId, updates) => {
       }
     }
 
-    // Secure contextual block / web app view standard pipeline fallback
-    if (tabData.activeMode === 'ai') {
-      const context = contextManager.getAIContext(tabId)
-      if (context.queries.length > 0 || context.results.length > 0 || context.visited_pages.length > 0) {
-        apiFetchJson(`/api/search/ai/contextual`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({ query: tabData.query, persona: searchPersona, context, region: userRegion })
-        })
-          .then(onSuccess).catch(onError).finally(onDone)
-        return
-      }
+    if (
+      tabData.activeMode === 'ai' &&
+      (context.queries.length > 0 || context.results.length > 0 || context.visited_pages.length > 0)
+    ) {
+      apiFetchJson('/api/search/ai/contextual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({ query: tabData.query, persona: searchPersona, context, region: userRegion })
+      }).then(onSuccess).catch(onError).finally(onDone)
+      return
     }
 
-    // Default target fallbacks outside native Electron runtime environment (e.g., standard browser view)
-    const endpoints = { seo: `/api/search/seo`, ai: `/api/search/ai`, community: `/api/search/community` }
+    const endpoints = { seo: '/api/search/seo', ai: '/api/search/ai', community: '/api/search/community' }
     let url = `${endpoints[tabData.activeMode]}?q=${encodeURIComponent(tabData.query)}&session_id=${tabData.sessionId}&gl=${userRegion}`
     if (tabData.activeMode === 'ai') url += `&persona=${searchPersona}`
 
     apiFetchJson(url, { signal: controller.signal }).then(onSuccess).catch(onError).finally(onDone)
-  }, [contextManager, userRegion])
+  }, [contextManager, isIncognito, setTabs, userRegion])
 
-  // Map handleSearch to performSearch to eliminate execution anomalies across the JSX elements
   const handleSearch = useCallback((tabId, searchPersona = "default") => {
-    const targetTab = tabs.find(t => t.id === tabId)
-    if (!targetTab || !targetTab.query?.trim()) return
-    
-    setTabs(p => p.map(t => t.id === tabId ? { ...t, loading: true, error: null } : t))
+    const currentTab = tabs.find(tab => tab.id === tabId)
+    const query = currentTab?.query?.trim()
+    if (!currentTab || !query) return
+
+    const targetTab = { ...currentTab, query }
+    const historyEntry = {
+      type: 'search',
+      query,
+      mode: targetTab.activeMode,
+      timestamp: new Date().toISOString(),
+    }
+
+    setTabs(currentTabs => currentTabs.map(tab => tab.id === tabId
+      ? {
+          ...tab,
+          query,
+          loading: true,
+          error: null,
+          history: [...(tab.history || []), historyEntry].slice(-50),
+        }
+      : tab))
+    recordHistoryItem(historyEntry)
+    if (!isIncognito) {
+      contextManager.addQuery(tabId, targetTab.sessionId, query, targetTab.activeMode)
+    }
     performSearch(tabId, targetTab, searchPersona)
-  }, [tabs, performSearch])
+  }, [contextManager, isIncognito, performSearch, recordHistoryItem, setTabs, tabs])
+
+  const handleModeChange = useCallback((mode) => {
+    if (!['seo', 'ai', 'community'].includes(mode)) return
+    const currentTab = tabs.find(tab => tab.id === activeTabId)
+    if (!currentTab || currentTab.activeMode === mode) return
+
+    const targetTab = {
+      ...currentTab,
+      activeMode: mode,
+      results: null,
+      error: null,
+      loading: Boolean(currentTab.query?.trim()),
+    }
+    setTabs(currentTabs => currentTabs.map(tab => tab.id === activeTabId ? targetTab : tab))
+
+    const query = targetTab.query?.trim()
+    if (!query) return
+    const historyEntry = { type: 'search', query, mode, timestamp: new Date().toISOString() }
+    recordHistoryItem(historyEntry)
+    if (!isIncognito) contextManager.addQuery(activeTabId, targetTab.sessionId, query, mode)
+    performSearch(activeTabId, targetTab, persona)
+  }, [activeTabId, contextManager, isIncognito, performSearch, persona, recordHistoryItem, setTabs, tabs])
 
   const createAndActivateNewTab = useCallback(() => {
     setTabState(current => {
@@ -800,13 +928,15 @@ const updateTab = useCallback((tabId, updates) => {
     if (!confirmed) return
 
     try {
-      await clearEntireSessionWorkspace(appSessionId || "default-session")
+      await contextManager.wipeWorkspace(appSessionId || "default-session")
     } catch (error) {
-      console.warn("Backend workspace wipe failed; clearing local browser state anyway.", error)
+      console.error("Backend workspace wipe failed:", error)
+      window.alert("SuperBrowser could not clear all persisted workspace data. Nothing was cleared locally; please try again.")
+      return
     }
 
     handleDeleteBrowsingData()
-  }, [appSessionId, handleDeleteBrowsingData])
+  }, [appSessionId, contextManager, handleDeleteBrowsingData])
 
   useEffect(() => {
     if (!window.superBrowserDesktop?.app?.onFindInPage) return
@@ -963,16 +1093,25 @@ const updateTab = useCallback((tabId, updates) => {
       setShowHistory(false)
       return
     }
-    updateTab(activeTabId, {
+
+    const currentTab = tabs.find(tab => tab.id === activeTabId)
+    if (!currentTab || !item?.query) return
+    const targetTab = {
+      ...currentTab,
       query: item.query,
       activeMode: item.mode || "seo",
       tabType: undefined,
       browserUrl: "",
       browserTitle: "",
       results: null,
-      error: null
-    })
-    setTimeout(() => handleSearch(activeTabId, persona), 0)
+      loading: true,
+      error: null,
+    }
+    setTabs(currentTabs => currentTabs.map(tab => tab.id === activeTabId ? targetTab : tab))
+    if (!isIncognito) {
+      contextManager.addQuery(activeTabId, targetTab.sessionId, targetTab.query, targetTab.activeMode)
+    }
+    performSearch(activeTabId, targetTab, persona)
     setShowHistory(false)
   }
 
@@ -1171,11 +1310,21 @@ const updateTab = useCallback((tabId, updates) => {
               <div className="flex items-center gap-1">
                 <button onClick={() => {
                   if (activeTab?.history && activeTab.history.length > 1) {
-                    const prev = activeTab.history[activeTab.history.length - 2];
-                    updateTab(activeTabId, { query: prev.query, activeMode: prev.mode, history: activeTab.history.slice(0, -1) });
-                    setTimeout(() => handleSearch(activeTabId, persona), 0);
+                    const remainingHistory = activeTab.history.slice(0, -1)
+                    const previous = remainingHistory[remainingHistory.length - 1]
+                    const targetTab = {
+                      ...activeTab,
+                      query: previous.query,
+                      activeMode: previous.mode,
+                      history: remainingHistory,
+                      loading: true,
+                      error: null,
+                      results: null,
+                    }
+                    setTabs(currentTabs => currentTabs.map(tab => tab.id === activeTabId ? targetTab : tab))
+                    performSearch(activeTabId, targetTab, persona)
                   } else {
-                    goHome();
+                    goHome()
                   }
                 }} className="p-2 flex items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-black transition-colors" title="Back">
                   <ChevronLeftIcon />
@@ -1233,7 +1382,7 @@ const updateTab = useCallback((tabId, updates) => {
                   </div>
                 )}
 
-                <ResultsPanel mode={activeTab?.activeMode} results={activeTab?.results} loading={activeTab?.loading} onOpenLink={openInAppUrl} query={activeTab?.query} />
+                <ResultsPanel mode={activeTab?.activeMode} results={activeTab?.results} loading={activeTab?.loading} onOpenLink={openInAppUrl} />
               </div>
 
             </div>
@@ -1259,7 +1408,7 @@ const updateTab = useCallback((tabId, updates) => {
           onClose={() => setPlaceholderModal(null)}
         />
       )}
-      <ContextWindow show={showContextInfo} onClose={() => setShowContextInfo(false)} tabId={activeTabId} sessionId={appSessionId} sessionStartedAt={sessionStartedAt} sessionStatus={sessionStatus} contextManager={contextManager} />
+      <ContextWindow show={showContextInfo} onClose={() => setShowContextInfo(false)} tabId={activeTabId} sessionId={appSessionId} />
     </div>
   )
 }
@@ -1902,11 +2051,23 @@ function DownloadsPage() {
 }
 
 function SettingsModal({ theme, onToggleTheme, onClose }) {
+  const [providerConfigStatus, setProviderConfigStatus] = useState('')
+  const isDesktop = Boolean(window.superBrowserDesktop?.isElectron)
+
   useEffect(() => {
     const handleKeyDown = (e) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onClose])
+
+  const openProviderConfig = async () => {
+    try {
+      const result = await window.superBrowserDesktop.backend.openProviderConfig()
+      setProviderConfigStatus(`Opened ${result.path}. Save your keys, then restart SuperBrowser.`)
+    } catch (error) {
+      setProviderConfigStatus(`Could not open the provider key file: ${error.message}`)
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in-up" onClick={onClose}>
@@ -1926,9 +2087,21 @@ function SettingsModal({ theme, onToggleTheme, onClose }) {
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-sm font-medium text-[var(--text-primary)]">Desktop mode</p>
-              <p className="text-xs text-[var(--text-secondary)]">{window.superBrowserDesktop?.isElectron ? 'Electron features enabled' : 'Web-only mode'}</p>
+              <p className="text-xs text-[var(--text-secondary)]">{isDesktop ? 'Electron features enabled' : 'Web-only mode'}</p>
             </div>
           </div>
+          {isDesktop && (
+            <div className="flex flex-col gap-2 pt-3 border-t border-[var(--border-color)]">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-[var(--text-primary)]">Search and AI providers</p>
+                  <p className="text-xs text-[var(--text-secondary)]">Configure your Groq and SerpAPI keys for the bundled backend.</p>
+                </div>
+                <button onClick={openProviderConfig} className="btn-secondary px-4 py-2 text-sm font-medium shrink-0">Open key file</button>
+              </div>
+              {providerConfigStatus && <p className="text-xs text-[var(--text-secondary)] break-all">{providerConfigStatus}</p>}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -2013,16 +2186,16 @@ function LoadingSkeleton() {
   )
 }
 
-function ResultsPanel({ mode, results, loading, onOpenLink, query }) {
+function ResultsPanel({ mode, results, loading, onOpenLink }) {
   if (loading) return <LoadingSkeleton />
   if (!results) return null
-  if (mode === 'seo') return <SEOResults results={results} onOpenLink={onOpenLink} query={query} />
+  if (mode === 'seo') return <SEOResults results={results} onOpenLink={onOpenLink} />
   if (mode === 'ai') return <AIResults results={results} onOpenLink={onOpenLink} />
   if (mode === 'community') return <Suspense fallback={<LoadingSkeleton />}><LazyCommunityResults results={results} onOpenLink={onOpenLink} /></Suspense>
   return null
 }
 
-function SEOResults({ results, onOpenLink, query = "" }) {
+function SEOResults({ results, onOpenLink }) {
   const items = results?.results || results || []
   const shoppingData = results?.shopping_results || []
   const hasShoppingData = shoppingData.length > 0
@@ -2059,10 +2232,11 @@ function SEOResults({ results, onOpenLink, query = "" }) {
   )
 }
 
-function AIResults({ results }) {
+function AIResults({ results, onOpenLink }) {
   const answer = results?.answer || results?.response || ''
+  const sources = Array.isArray(results?.sources) ? results.sources : []
   const isLiveData = results?.live_data === true
-  const sourceCount = results?.sources_scraped || 0
+  const sourceCount = results?.sources_scraped || sources.length
   return (
     <div className="max-w-3xl space-y-6 animate-fade-in-up">
       {answer ? (
@@ -2157,7 +2331,7 @@ function PersonaDropdown({ value, onChange, personas }) {
   )
 }
 
-function ContextWindow({ show, onClose, tabId, sessionId, contextManager }) {
+function ContextWindow({ show, onClose, tabId, sessionId }) {
   const [chatMessages, setChatMessages] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [models, setModels] = useState([])
@@ -2166,16 +2340,20 @@ function ContextWindow({ show, onClose, tabId, sessionId, contextManager }) {
   const modelSelectorRef = useRef(null)
 
   useEffect(() => {
-    if (show) {
-      apiFetchJson(`/api/context/models`)
-        .then(data => {
-          if (data.models) {
-            setModels(data.models)
-            setSelectedModel(data.default || 'llama-3.1-8b-instant')
-          }
-        })
-        .catch(() => { })
-    }
+    if (!show) return
+    const contextBridge = window.superBrowserDesktop?.context
+    const request = contextBridge?.getModels
+      ? contextBridge.getModels()
+      : apiFetchJson('/api/context/models')
+
+    request
+      .then(data => {
+        if (data.models) {
+          setModels(data.models)
+          setSelectedModel(data.default || 'default')
+        }
+      })
+      .catch(error => console.warn('Could not load context models:', error))
   }, [show])
 
   useEffect(() => {
@@ -2194,22 +2372,26 @@ function ContextWindow({ show, onClose, tabId, sessionId, contextManager }) {
 
   const currentModel = models.find(m => m.id === selectedModel) || { name: 'Llama 3.1 8B', id: selectedModel }
 
-  const handleSend = async (text, modelId) => {
+  const handleSend = async (text) => {
     const userMsg = { id: Date.now().toString(), text, sender: 'user' }
     setChatMessages(prev => [...prev, userMsg])
     setIsLoading(true)
 
     try {
-      const data = await apiFetchJson(`/api/context/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: sessionId,
-          message: text,
-          tab_id: tabId,
-          model: selectedModel
-        })
-      })
+      const requestedModel = selectedModel
+      const contextBridge = window.superBrowserDesktop?.context
+      const data = contextBridge?.chat
+        ? await contextBridge.chat(sessionId, text, tabId, requestedModel)
+        : await apiFetchJson('/api/context/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              session_id: sessionId,
+              message: text,
+              tab_id: tabId,
+              model: requestedModel,
+            })
+          })
 
       const aiReply = {
         id: (Date.now() + 1).toString(),
@@ -2564,7 +2746,6 @@ function BrowserMenu({
   onWipeWorkspace
 }) {
   const [zoomLevel, setZoomLevel] = useState(() => Number(document.documentElement.dataset.zoomLevel) || 100)
-  const isElectron = Boolean(window.superBrowserDesktop?.isElectron)
 
   const handleAction = (action) => {
     onClose()

@@ -19,13 +19,16 @@
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Where to store context files. Defaults to /tmp which survives sleep/wake.
-# Override with CONTEXT_STORE_DIR env var for persistent volumes.
-CONTEXT_DIR = Path(os.environ.get("CONTEXT_STORE_DIR", "/tmp/superbrowser_contexts"))
+# Where to store context files. Use the operating system's writable temp
+# directory by default and allow deployments to override it with a volume.
+CONTEXT_DIR = Path(
+    os.environ.get("CONTEXT_STORE_DIR", str(Path(tempfile.gettempdir()) / "superbrowser_contexts"))
+)
 
 
 def save_context(session_id: str, tab_id: str, context: dict) -> None:
@@ -107,20 +110,25 @@ def load_all_contexts() -> dict[str, dict]:
     return contexts
 
 
-def delete_context(session_id: str, tab_id: str) -> None:
-    """
-    Delete the persisted context file for a specific tab.
-
-    Called when the user explicitly clears a tab's context via
-    DELETE /api/context/clear/{session_id}/{tab_id}.
-
-    Args:
-        session_id: The user's browsing session identifier.
-        tab_id:     The specific tab identifier within the session.
-    """
-    path = CONTEXT_DIR / f"{session_id}_{tab_id}.json"
+def delete_context(session_id: str, tab_id: str | None = None) -> list[str]:
+    """Delete persisted context and return the names of files that could not be removed."""
     try:
-        path.unlink(missing_ok=True)
-        logger.debug("Context deleted: %s", path.name)
+        paths = (
+            [CONTEXT_DIR / f"{session_id}_{tab_id}.json"]
+            if tab_id is not None
+            else list(CONTEXT_DIR.glob(f"{session_id}_*.json"))
+        )
     except OSError as exc:
-        logger.warning("Failed to delete context file %s: %s", path.name, exc)
+        logger.warning("Failed to enumerate persisted context for %s: %s", session_id, exc)
+        return [CONTEXT_DIR.name or "context directory"]
+
+    failed_paths: list[str] = []
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+            logger.debug("Context deleted: %s", path.name)
+        except OSError as exc:
+            failed_paths.append(path.name)
+            logger.warning("Failed to delete context file %s: %s", path.name, exc)
+
+    return failed_paths

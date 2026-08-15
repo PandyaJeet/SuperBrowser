@@ -8,7 +8,7 @@ import styles from './ThemeToggle.module.css';
  * Uses emoji icons (🌙 for dark, ☀️ for light)
  ***/
 export function ThemeToggle() {
-  const { theme, toggleTheme, isDark } = useTheme();
+  const { toggleTheme, isDark } = useTheme();
 
   return (
     <button

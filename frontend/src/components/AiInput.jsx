@@ -26,7 +26,7 @@ export function AiInput({ messages, onSendMessage, backgroundText = "AI Input", 
 
   const handleSend = () => {
     if (!inputText.trim()) return;
-    onSendMessage(inputText, 'default_model');
+    onSendMessage(inputText);
     setInputText('');
   };
 
