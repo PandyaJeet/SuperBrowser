@@ -10,10 +10,28 @@ router = APIRouter()
 # ── Request Model ──────────────────────────────────────────────────────────────
 class ContextualAIRequest(BaseModel):
     """Request model for AI queries with context"""
-    query: str
-    persona: str = "default"
+
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=500
+    )
+
+    persona: Literal[
+        "default",
+        "chatgpt",
+        "gemini",
+        "perplexity",
+        "claude"
+    ] = "default"
+
     context: Optional[Dict] = None
-    region: str = "us"
+
+    region: str = Field(
+        default="us",
+        max_length=4
+    )
+
     model: Optional[str] = "llama-3.1-8b-instant"
 
 
@@ -45,7 +63,17 @@ class AIResponse(BaseModel):
     summary="Get AI-powered search answer",
     description="Legacy endpoint that returns an AI-generated answer for a given query using the selected persona and region."
 )
-async def get_ai(q: str, session_id: str = "", persona: str = "default", gl: str = "us", model: str = "llama-3.1-8b-instant"):
+async def get_ai(
+    q: str = Query(
+        ...,
+        min_length=1,
+        max_length=500
+    ),
+    session_id: str = "",
+    persona: str = "default",
+    gl: str = "us",
+    model: str = "llama-3.1-8b-instant"
+):
     """Legacy endpoint for backward compatibility"""
     q = sanitize_query(q)
     return await get_ai_consensus(query=q, persona=persona, gl=gl, model=model)

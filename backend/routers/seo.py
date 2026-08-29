@@ -187,16 +187,18 @@ async def _wikipedia_fallback_results(query: str) -> list[dict]:
     summary="Multi-engine web search",
     description="Searches Google, Bing, and DuckDuckGo simultaneously and returns ranked organic results and shopping results. Uses SerpAPI with scraper fallback."
 )
-async def get_seo(q: str = Query(default=None)):
+async def get_seo(
+    q: str = Query(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Search query"
+    )
+):
     """
     SEO search endpoint - returns natural results from CDN/default behavior.
     No region filtering - search engines return results based on their default logic.
     """
-    if not q:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "query param q is required"}
-        )
 
     q = sanitize_query(q)
     key = cache_key(q, "all", "seo-v4")
