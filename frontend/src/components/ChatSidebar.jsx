@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { apiFetchJson } from '../lib/apiFetch'
 
 const PlusIcon = () => (
@@ -63,7 +63,7 @@ export function ChatSidebar({ tabId, appSessionId, onClose }) {
   }, [])
 
   // Fetch chat sessions for this tab
-  const fetchSessions = async (selectLatest = true) => {
+  const fetchSessions = useCallback(async (selectLatest = true) => {
     try {
       const data = await apiFetchJson(`/api/context/chat/sessions/${tabId}`)
       
@@ -74,13 +74,19 @@ export function ChatSidebar({ tabId, appSessionId, onClose }) {
         }
       } else {
         // Automatically create a session if none exists
-        createSession()
+        const created = await apiFetchJson(`/api/context/chat/session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tab_id: tabId })
+        })
+        setSessions([{ id: created.session_id }])
+        setCurrentSessionId(created.session_id)
       }
     } catch (err) {
       console.error(err)
       setError(err?.isAuthError ? err.message : 'Could not load chat sessions.')
     }
-  }
+  }, [tabId])
 
   // Create a new session
   const createSession = async () => {
@@ -151,7 +157,7 @@ export function ChatSidebar({ tabId, appSessionId, onClose }) {
   // Fetch sessions on mount / tabId change
   useEffect(() => {
     fetchSessions(true)
-  }, [tabId])
+  }, [fetchSessions])
 
   // Scroll to bottom when messages arrive
   useEffect(() => {

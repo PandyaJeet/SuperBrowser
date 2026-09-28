@@ -1,13 +1,12 @@
 // frontend/src/context/ThemeContext.jsx
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { ThemeContext } from "./themeContext.js";
 
 /*****
  * Theme Context for SuperBrowser
  * Manages dark mode / light mode switching globally
  * Persists user preference in localStorage
  ******/
-const ThemeContext = createContext();
-
 export function ThemeProvider({ children }) {
   const [theme, setTheme] = useState(() => {
     // Load theme from localStorage, or default to 'light'
@@ -73,17 +72,4 @@ export function ThemeProvider({ children }) {
       {children}
     </ThemeContext.Provider>
   );
-}
-
-/**
- * Custom hook to use theme context
- * @throws {Error} If used outside ThemeProvider
- * @returns {Object} Theme context with theme, toggleTheme, isDark, isLight
- */
-export function useTheme() {
-  const context = useContext(ThemeContext);
-  if (!context) {
-    throw new Error('useTheme must be used within ThemeProvider');
-  }
-  return context;
 }

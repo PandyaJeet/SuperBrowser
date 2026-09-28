@@ -24,10 +24,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Push with an admin PAT so the commit bypasses the `protect-main`
-          # ruleset via the "Repository admin" bypass role (the github-actions
-          # bot is not a bypass actor and cannot push to main directly).
-          token: ${{ secrets.CONTRIB_PAT }}
+          token: ${{ secrets.CONTRIB_PAT || github.token }}
 
       - name: Fetch Merged PR Authors (Pagination)
         env:

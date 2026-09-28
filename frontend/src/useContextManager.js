@@ -164,7 +164,11 @@ export function useContextManager() {
 
   const fetchTabContext = useCallback(async (tabId, sessionId) => {
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.getTab) {
-      return window.superBrowserDesktop.context.getTab(sessionId, tabId);
+      try {
+        return await window.superBrowserDesktop.context.getTab(sessionId, tabId);
+      } catch {
+        // Fall back to the web API.
+      }
     }
     return apiFetchJson(`/api/context/get/${sessionId}/${tabId}`);
   }, []);
@@ -200,7 +204,11 @@ export function useContextManager() {
 
   const fetchSessionContext = useCallback(async (sessionId) => {
     if (window.superBrowserDesktop?.isElectron && window.superBrowserDesktop?.context?.getSession) {
-      return window.superBrowserDesktop.context.getSession(sessionId)
+      try {
+        return await window.superBrowserDesktop.context.getSession(sessionId)
+      } catch {
+        // Fall back to the web API.
+      }
     }
     const secret = sessionSecrets.current[sessionId]
     return apiFetchJson(`/api/context/session/${sessionId}`, {

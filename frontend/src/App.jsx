@@ -56,7 +56,9 @@ function writeWebDownloads(items) {
   try {
     const storage = isIncognitoRuntime() ? window.sessionStorage : window.localStorage
     storage.setItem(WEB_DOWNLOADS_STORAGE_KEY, JSON.stringify(items))
-  } catch { }
+  } catch {
+    // Storage can be unavailable in private browsing.
+  }
 }
 
 function readWebHistory() {
@@ -73,7 +75,9 @@ function writeWebHistory(items) {
   try {
     if (isIncognitoRuntime()) return
     window.localStorage.setItem(WEB_HISTORY_STORAGE_KEY, JSON.stringify(items))
-  } catch { }
+  } catch {
+    // Storage can be unavailable in private browsing.
+  }
 }
 
 function readBookmarks() {
@@ -88,7 +92,9 @@ function readBookmarks() {
 function writeBookmarks(items) {
   try {
     window.localStorage.setItem(BOOKMARKS_STORAGE_KEY, JSON.stringify(items))
-  } catch { }
+  } catch {
+    // Storage can be unavailable in private browsing.
+  }
 }
 
 function createInstantSearchResults(query) {
@@ -395,6 +401,7 @@ export default function App() {
   // Phase 6: Extract loadContext and contextRestored from the hook
   const { loadContext, contextRestored } = contextManager
   const activeTab = tabs.find(t => t.id === activeTabId)
+  const activeSessionId = activeTab?.sessionId
   const isIncognito = isIncognitoRuntime()
 
   const isBrowserTab = Boolean(activeTab?.browserUrl)
@@ -418,7 +425,9 @@ export default function App() {
     try {
       if (isIncognito) return
       window.localStorage.setItem(THEME_STORAGE_KEY, theme)
-    } catch { }
+    } catch {
+      // Browser APIs may be unavailable in a restricted context.
+    }
   }, [theme, isIncognito])
 
   useEffect(() => {
@@ -431,22 +440,14 @@ export default function App() {
     }
   }, [appSessionId, isIncognito, tabState])
 
-  useEffect(() => {
-    console.log(`[App] App initialized:`, {
-      activeTabId,
-      totalTabs: tabs.length,
-      firstTabId: tabs[0]?.id,
-      sessionId: appSessionId,
-      isNewTab: !tabs[0]?.results && !tabs[0]?.loading && !tabs[0]?.error && !tabs[0]?.browserUrl
-    })
-  }, [])
 
   useEffect(() => {
     if (isIncognito) {
-      setSessionStatus("incognito")
       try {
         window.sessionStorage.clear()
-      } catch { }
+      } catch {
+        // Browser APIs may be unavailable in a restricted context.
+      }
       return
     }
     contextManager.startSession(appSessionId)
@@ -461,10 +462,10 @@ export default function App() {
 
   // Phase 6: Load context when tab becomes active
   useEffect(() => {
-    if (activeTab && activeTab.sessionId && activeTabId) {
-      loadContext(activeTabId, activeTab.sessionId)
+    if (activeSessionId && activeTabId) {
+      loadContext(activeTabId, activeSessionId)
     }
-  }, [activeTabId, activeTab?.sessionId, loadContext])
+  }, [activeSessionId, activeTabId, loadContext])
 
   const updateTab = useCallback((tabId, updates) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t))
@@ -876,7 +877,9 @@ export default function App() {
         activeFrame.contentWindow.focus()
         activeFrame.contentWindow.print()
         return
-      } catch { }
+      } catch {
+        // Browser APIs may be unavailable in a restricted context.
+      }
     }
 
     if (activeTab?.browserUrl) {
@@ -910,11 +913,15 @@ export default function App() {
       window.localStorage.clear()
       if (savedTheme) window.localStorage.setItem(THEME_STORAGE_KEY, savedTheme)
       if (savedBookmarks) window.localStorage.setItem(BOOKMARKS_STORAGE_KEY, savedBookmarks)
-    } catch { }
+    } catch {
+      // Browser APIs may be unavailable in a restricted context.
+    }
 
     try {
       window.sessionStorage.clear()
-    } catch { }
+    } catch {
+      // Browser APIs may be unavailable in a restricted context.
+    }
 
     if (window.superBrowserDesktop?.app?.clearBrowsingData) {
       window.superBrowserDesktop.app.clearBrowsingData().catch(() => { })
@@ -1085,7 +1092,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activeTabId, handleModeChange, updateTab, requestNewTab, handleCloseTab, handleNewIncognitoWindow, openDownloadsTab, openBookmarksTab, handleDeleteBrowsingData, handleFindInPage, handlePrint])
+  }, [activeTabId, handleModeChange, updateTab, requestNewTab, handleCloseTab, handleNewIncognitoWindow, openDownloadsTab, openBookmarksTab, handleDeleteBrowsingData, handleFindInPage, handlePrint, setActiveTabId])
 
   function handleHistoryClick(item) {
     if (item?.type === "page" && item.url) {
@@ -1244,7 +1251,7 @@ export default function App() {
           <DownloadsPage />
         ) : isBrowserTab ? (
           <div className="flex-1 min-h-0 bg-white">
-            <BrowserPanel url={activeTab.browserUrl} title={activeTab.browserTitle} onClose={() => updateTab(activeTabId, { browserUrl: "", browserTitle: "" })} />
+            <BrowserPanel key={activeTab.browserUrl} url={activeTab.browserUrl} title={activeTab.browserTitle} onClose={() => updateTab(activeTabId, { browserUrl: "", browserTitle: "" })} />
           </div>
         ) : isNewTab ? (
           /* Hand-drawn Centered Landing Page */
@@ -2110,7 +2117,7 @@ function SettingsModal({ theme, onToggleTheme, onClose }) {
 
 function FindInPageBox({ onClose }) {
   const [query, setQuery] = useState("")
-  const [lastResult, setLastResult] = useState(null)
+  const lastResult = useRef(null)
   const inputRef = useRef(null)
 
   const runFind = useCallback((forward = true) => {
@@ -2119,22 +2126,22 @@ function FindInPageBox({ onClose }) {
 
     const webview = document.querySelector('webview')
     if (webview?.findInPage) {
-      const requestId = webview.findInPage(value, { forward, findNext: lastResult === value })
-      setLastResult(value)
+      const requestId = webview.findInPage(value, { forward, findNext: lastResult.current === value })
+      lastResult.current = value
       return requestId
     }
 
     if (window.superBrowserDesktop?.app?.findInPage) {
-      window.superBrowserDesktop.app.findInPage(value, { forward, findNext: lastResult === value }).catch(() => { })
-      setLastResult(value)
+      window.superBrowserDesktop.app.findInPage(value, { forward, findNext: lastResult.current === value }).catch(() => { })
+      lastResult.current = value
       return
     }
 
     if (typeof window.find === 'function') {
       window.find(value, false, !forward, true, false, false, false)
-      setLastResult(value)
+      lastResult.current = value
     }
-  }, [query, lastResult])
+  }, [query])
 
   const closeFind = useCallback(() => {
     const webview = document.querySelector('webview')
@@ -2488,9 +2495,6 @@ function PagePreview({ url, title, onRetryBrowser }) {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setError("")
-    setPreview(null)
 
     apiFetchJson(`/api/page/preview?url=${encodeURIComponent(url)}`)
       .then(data => {
@@ -2561,10 +2565,6 @@ function BrowserPanel({ url, title, onClose }) {
   const [frameKey, setFrameKey] = useState(0)
   const [showPreview, setShowPreview] = useState(false)
   const webviewRef = useRef(null)
-
-  useEffect(() => {
-    setShowPreview(false)
-  }, [isElectron, url])
 
   useEffect(() => {
     if (!isElectron || showPreview || !webviewRef.current) return
@@ -2728,6 +2728,62 @@ function PricingPage({ onClose }) {
   )
 }
 
+function MenuItem({ icon, label, shortcut, rightIcon, onClick, disabled, handleAction }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        if (!disabled) handleAction(onClick)
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.preventDefault()
+        e.stopPropagation()
+        if (!disabled) handleAction(onClick)
+      }}
+      disabled={disabled}
+      className={`w-full flex items-center px-4 py-1.5 text-[13px] hover:bg-[var(--bg-hover)] group transition-colors ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+    >
+      <span className="text-[var(--text-tertiary)] mr-3">{icon || <span className="w-4 h-4 inline-block" />}</span>
+      <span className="text-[var(--text-primary)] flex-1 text-left">{label}</span>
+      {shortcut && <span className="text-[#9aa0a6] text-[11px] font-medium ml-4">{shortcut}</span>}
+      {rightIcon && <span className="text-[var(--text-tertiary)] ml-3">{rightIcon}</span>}
+    </button>
+  )
+}
+
+function ProfileMenu({ userIcon }) {
+  return (
+    <button disabled className="w-[calc(100%-1rem)] px-3 py-2 flex items-center bg-[var(--bg-elevated)] mx-2 my-1.5 rounded-lg border border-[var(--border-color)] opacity-50 cursor-not-allowed">
+      <div className="w-7 h-7 bg-[var(--border-color)] rounded-full flex items-center justify-center text-[var(--text-secondary)] mr-3">
+        {userIcon}
+      </div>
+      <span className="text-[13px] text-[var(--text-primary)] flex-1 text-left font-medium">Your Browser</span>
+      <span className="text-[11px] bg-[rgba(50,121,249,0.1)] text-[#3279f9] px-2 py-0.5 rounded-md font-medium border border-[rgba(50,121,249,0.2)]">Not signed in</span>
+    </button>
+  )
+}
+
+function ZoomControl({ zoomLevel, applyZoom, toggleFullscreen, zoomIcon, fullscreenIcon }) {
+  return (
+    <div className="w-full flex items-center px-4 py-1.5 text-[13px] hover:bg-[var(--bg-hover)] transition-colors">
+      <span className="text-[var(--text-tertiary)] mr-3">{zoomIcon}</span>
+      <span className="text-[var(--text-primary)] flex-1 text-left">Zoom</span>
+      <div className="flex items-center ml-4 border border-[var(--border-color)] rounded-md overflow-hidden bg-white">
+        <button onClick={() => applyZoom(zoomLevel - 10)} className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">−</button>
+        <div className="w-[1px] h-4 bg-[var(--border-color)]"></div>
+        <span className="px-2 text-[12px] font-medium text-[var(--text-primary)] min-w-[40px] text-center">{zoomLevel}%</span>
+        <div className="w-[1px] h-4 bg-[var(--border-color)]"></div>
+        <button onClick={() => applyZoom(zoomLevel + 10)} className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">+</button>
+      </div>
+      <button onClick={toggleFullscreen} className="ml-3 p-1 rounded-md border border-[var(--border-color)] bg-white hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]">
+        {fullscreenIcon}
+      </button>
+    </div>
+  )
+}
+
 function BrowserMenu({
   onClose,
   onAddTab,
@@ -2824,56 +2880,6 @@ function BrowserMenu({
 
   const divider = <div className="h-[1px] w-full bg-[var(--border-color)] my-1" />
 
-  const MenuItem = ({ icon, label, shortcut, rightIcon, onClick, disabled }) => (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation()
-        if (!disabled) handleAction(onClick)
-      }}
-      onKeyDown={(e) => {
-        if (e.key !== 'Enter' && e.key !== ' ') return
-        e.preventDefault()
-        e.stopPropagation()
-        if (!disabled) handleAction(onClick)
-      }}
-      disabled={disabled}
-      className={`w-full flex items-center px-4 py-1.5 text-[13px] hover:bg-[var(--bg-hover)] group transition-colors ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-    >
-      <span className="text-[var(--text-tertiary)] mr-3">{icon || icons.empty}</span>
-      <span className="text-[var(--text-primary)] flex-1 text-left">{label}</span>
-      {shortcut && <span className="text-[#9aa0a6] text-[11px] font-medium ml-4">{shortcut}</span>}
-      {rightIcon && <span className="text-[var(--text-tertiary)] ml-3">{rightIcon}</span>}
-    </button>
-  )
-
-  const ProfileMenu = () => (
-    <button disabled className="w-[calc(100%-1rem)] px-3 py-2 flex items-center bg-[var(--bg-elevated)] mx-2 my-1.5 rounded-lg border border-[var(--border-color)] opacity-50 cursor-not-allowed">
-      <div className="w-7 h-7 bg-[var(--border-color)] rounded-full flex items-center justify-center text-[var(--text-secondary)] mr-3">
-        {icons.user}
-      </div>
-      <span className="text-[13px] text-[var(--text-primary)] flex-1 text-left font-medium">Your Browser</span>
-      <span className="text-[11px] bg-[rgba(50,121,249,0.1)] text-[#3279f9] px-2 py-0.5 rounded-md font-medium border border-[rgba(50,121,249,0.2)]">Not signed in</span>
-    </button>
-  )
-
-  const ZoomControl = () => (
-    <div className="w-full flex items-center px-4 py-1.5 text-[13px] hover:bg-[var(--bg-hover)] transition-colors">
-      <span className="text-[var(--text-tertiary)] mr-3">{icons.zoom}</span>
-      <span className="text-[var(--text-primary)] flex-1 text-left">Zoom</span>
-      <div className="flex items-center ml-4 border border-[var(--border-color)] rounded-md overflow-hidden bg-white">
-        <button onClick={() => applyZoom(zoomLevel - 10)} className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">−</button>
-        <div className="w-[1px] h-4 bg-[var(--border-color)]"></div>
-        <span className="px-2 text-[12px] font-medium text-[var(--text-primary)] min-w-[40px] text-center">{zoomLevel}%</span>
-        <div className="w-[1px] h-4 bg-[var(--border-color)]"></div>
-        <button onClick={() => applyZoom(zoomLevel + 10)} className="px-2 hover:bg-[var(--bg-hover)] text-[16px] leading-none pb-0.5 text-[var(--text-secondary)]">+</button>
-      </div>
-      <button onClick={toggleFullscreen} className="ml-3 p-1 rounded-md border border-[var(--border-color)] bg-white hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]">
-        {icons.fullscreen}
-      </button>
-    </div>
-  )
-
   return (
     <div
       onMouseDown={(event) => event.stopPropagation()}
@@ -2895,38 +2901,38 @@ function BrowserMenu({
         <span className="text-[var(--text-primary)] flex-1 text-left">New tab</span>
         <span className="text-[#9aa0a6] text-[11px] font-medium ml-4">Ctrl+T</span>
       </button>
-      <MenuItem icon={icons.window} label="New window" shortcut="Ctrl+N" onClick={onNewWindow} />
-      <MenuItem icon={icons.incognito} label="New Incognito window" shortcut="Ctrl+Shift+N" onClick={onNewIncognitoWindow} />
+      <MenuItem handleAction={handleAction} icon={icons.window} label="New window" shortcut="Ctrl+N" onClick={onNewWindow} />
+      <MenuItem handleAction={handleAction} icon={icons.incognito} label="New Incognito window" shortcut="Ctrl+Shift+N" onClick={onNewIncognitoWindow} />
 
       {divider}
-      <ProfileMenu />
+      <ProfileMenu userIcon={icons.user} />
       {divider}
 
-      <MenuItem icon={icons.key} label="Passwords and autofill" rightIcon="▶" disabled />
-      <MenuItem icon={icons.history} label={isIncognito ? "History off in Incognito" : "History"} onClick={onShowHistory} disabled={isIncognito} />
-      <MenuItem icon={icons.download} label="Downloads" shortcut="Ctrl+J" onClick={onOpenDownloads} />
-      <MenuItem icon={icons.star} label="Bookmarks and lists" rightIcon="▶" onClick={onOpenBookmarks} />
-      <MenuItem icon={icons.grid} label="Tab groups" rightIcon="▶" disabled />
-      <MenuItem icon={icons.puzzle} label="Extensions" rightIcon="▶" onClick={onOpenExtensions} />
-      <MenuItem icon={icons.trash} label="Delete browsing data..." shortcut="Ctrl+Shift+Del" onClick={onDeleteBrowsingData} />
+      <MenuItem handleAction={handleAction} icon={icons.key} label="Passwords and autofill" rightIcon="▶" disabled />
+      <MenuItem handleAction={handleAction} icon={icons.history} label={isIncognito ? "History off in Incognito" : "History"} onClick={onShowHistory} disabled={isIncognito} />
+      <MenuItem handleAction={handleAction} icon={icons.download} label="Downloads" shortcut="Ctrl+J" onClick={onOpenDownloads} />
+      <MenuItem handleAction={handleAction} icon={icons.star} label="Bookmarks and lists" rightIcon="▶" onClick={onOpenBookmarks} />
+      <MenuItem handleAction={handleAction} icon={icons.grid} label="Tab groups" rightIcon="▶" disabled />
+      <MenuItem handleAction={handleAction} icon={icons.puzzle} label="Extensions" rightIcon="▶" onClick={onOpenExtensions} />
+      <MenuItem handleAction={handleAction} icon={icons.trash} label="Delete browsing data..." shortcut="Ctrl+Shift+Del" onClick={onDeleteBrowsingData} />
 
       {divider}
-      <ZoomControl />
+      <ZoomControl zoomLevel={zoomLevel} applyZoom={applyZoom} toggleFullscreen={toggleFullscreen} zoomIcon={icons.zoom} fullscreenIcon={icons.fullscreen} />
       {divider}
 
-      <MenuItem icon={icons.print} label="Print..." shortcut="Ctrl+P" onClick={onPrint} />
-      <MenuItem icon={icons.lens} label="Search with Google Lens" disabled />
-      <MenuItem icon={icons.translate} label="Translate..." disabled />
-      <MenuItem icon={icons.find} label="Find in page" shortcut="Ctrl+F" onClick={onFindInPage} />
-      <MenuItem icon={icons.cast} label="Cast, save, and share" rightIcon="▶" disabled />
-      <MenuItem icon={icons.briefcase} label="More tools" rightIcon="▶" disabled />
+      <MenuItem handleAction={handleAction} icon={icons.print} label="Print..." shortcut="Ctrl+P" onClick={onPrint} />
+      <MenuItem handleAction={handleAction} icon={icons.lens} label="Search with Google Lens" disabled />
+      <MenuItem handleAction={handleAction} icon={icons.translate} label="Translate..." disabled />
+      <MenuItem handleAction={handleAction} icon={icons.find} label="Find in page" shortcut="Ctrl+F" onClick={onFindInPage} />
+      <MenuItem handleAction={handleAction} icon={icons.cast} label="Cast, save, and share" rightIcon="▶" disabled />
+      <MenuItem handleAction={handleAction} icon={icons.briefcase} label="More tools" rightIcon="▶" disabled />
 
       {divider}
-      <MenuItem icon={icons.help} label="Help" onClick={openHelp} />
-      <MenuItem icon={icons.pricing} label="Pricing" onClick={onOpenPricing} />
-      <MenuItem icon={icons.settings} label="Settings" onClick={onOpenSettings} />
-      <MenuItem icon={icons.trash} label="Wipe Workspace" onClick={onWipeWorkspace} />
-      <MenuItem icon={icons.exit} label="Exit" onClick={exitApp} />
+      <MenuItem handleAction={handleAction} icon={icons.help} label="Help" onClick={openHelp} />
+      <MenuItem handleAction={handleAction} icon={icons.pricing} label="Pricing" onClick={onOpenPricing} />
+      <MenuItem handleAction={handleAction} icon={icons.settings} label="Settings" onClick={onOpenSettings} />
+      <MenuItem handleAction={handleAction} icon={icons.trash} label="Wipe Workspace" onClick={onWipeWorkspace} />
+      <MenuItem handleAction={handleAction} icon={icons.exit} label="Exit" onClick={exitApp} />
     </div>
   )
 }

@@ -1,5 +1,5 @@
 // frontend/src/components/ThemeToggle.jsx
-import { useTheme } from '../context/ThemeContext';
+import { useTheme } from '../context/themeContext';
 import styles from './ThemeToggle.module.css';
 
 /****

@@ -9,6 +9,7 @@ on:
     types: [opened, reopened, synchronize]
 
 permissions:
+  contents: read
   pull-requests: write
   issues: write
 
@@ -19,6 +20,7 @@ jobs:
       - name: Check if PR author has starred the repo
         uses: actions/github-script@v7
         with:
+          github-token: ${{ github.token }}
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -31,10 +33,21 @@ jobs:
               return;
             }
 
-            const stargazers = await github.paginate(
-              github.rest.activity.listStargazersForRepo,
-              { owner, repo, per_page: 100 }
-            );
+            let stargazers;
+            try {
+              stargazers = await github.paginate(
+                github.rest.activity.listStargazersForRepo,
+                { owner, repo, per_page: 100 }
+              );
+            } catch (error) {
+              if (error.status === 403) {
+                core.warning(
+                  'GitHub denied access to the stargazer list; skipping star verification.'
+                );
+                return;
+              }
+              throw error;
+            }
             const hasStarred = stargazers.some(u => u.login.toLowerCase() === author.toLowerCase());
 
             if (hasStarred) {

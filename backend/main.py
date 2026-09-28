@@ -5,6 +5,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 backend_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+# Permit launching as `uvicorn backend.main:app` from the repository root.
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
 load_dotenv(backend_dir / ".env")
 
 runtime_env_file = os.getenv("SUPERBROWSER_ENV_FILE")
@@ -15,7 +18,6 @@ from utils.context_persistence import load_all_contexts
 from routers import pages
 
 # Run database setup if database/context_db.py does not exist
-sys.path.append(str(backend_dir))
 db_file = backend_dir / "database" / "context_db.py"
 if not getattr(sys, "frozen", False) and not db_file.exists():
     import setup_database
